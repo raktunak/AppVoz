@@ -1,0 +1,40 @@
+# AppVoz — Motor Tutor por Voz
+# Stack propio e independiente. Levantar con: docker compose up -d
+services:
+  db:
+    image: pgvector/pgvector:pg15
+    container_name: appvoz-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-appvoz}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-appvoz_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-appvoz}
+    ports:
+      - "5434:5432"          # 5434 en host (5432/5433 ocupados por walloop/kiosko)
+    volumes:
+      - appvoz-db-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-appvoz} -d ${POSTGRES_DB:-appvoz}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build: ./backend
+    container_name: appvoz-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # dentro de la red de compose el host de la DB es "db"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-appvoz}:${POSTGRES_PASSWORD:-appvoz_dev}@db:5432/${POSTGRES_DB:-appvoz}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend:/app       # hot-reload en desarrollo
+
+volumes:
+  appvoz-db-data:

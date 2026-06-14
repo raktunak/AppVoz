@@ -1,0 +1,15 @@
+# Núcleo del backend
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic-settings==2.7.1
+
+# Base de datos + pgvector
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+pgvector==0.3.6
+
+# IA (Gemini / embeddings) — SDK nuevo de Google GenAI
+google-genai==1.2.0
+
+# La capa de voz (Pipecat + STT/TTS) se añade en la siguiente fase:
+# pipecat-ai[google,silero]

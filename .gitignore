@@ -1,0 +1,28 @@
+# === Secrets / entorno ===
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials/
+*service-account*.json
+*-credentials*.json
+
+# === Dependencias ===
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# === Build / dist ===
+dist/
+build/
+.cache/
+
+# === Sistema / editor ===
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
