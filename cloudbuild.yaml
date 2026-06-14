@@ -1,0 +1,40 @@
+# AppVoz — CI/CD: build + deploy del backend a Cloud Run en cada push a main.
+# Los secretos (DATABASE_URL, GOOGLE_API_KEY) NO van aquí: se fijan una vez en
+# el servicio Cloud Run y se conservan entre despliegues.
+substitutions:
+  _REGION: europe-west1
+  _SERVICE: appvoz-api
+  _REPO: cloud-run-source-deploy
+
+steps:
+  # 1) Build de la imagen del backend
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$COMMIT_SHA
+      - ./backend
+
+  # 2) Push a Artifact Registry
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$COMMIT_SHA
+
+  # 3) Deploy a Cloud Run (mantiene las env vars ya configuradas)
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$COMMIT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY
