@@ -6,6 +6,17 @@ from .db import engine
 app = FastAPI(title="AppVoz — Motor Tutor por Voz", version="0.1.0")
 
 
+@app.get("/")
+async def root():
+    """Info básica del servicio."""
+    return {
+        "app": "AppVoz — Motor Tutor por Voz",
+        "version": app.version,
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
 @app.get("/health")
 async def health():
     """Liveness: la API responde."""
