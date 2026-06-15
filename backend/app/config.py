@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     google_api_key: str = ""
 
     # Embeddings
-    embedding_model: str = "text-embedding-004"
+    embedding_model: str = "gemini-embedding-001"
     embedding_dim: int = 768
 
 
