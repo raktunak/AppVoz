@@ -1,21 +1,25 @@
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from .chunking import chunk_text
 from .db import engine
 from .embeddings import embed_texts, to_pgvector
+from .rag import retrieve
+from .voice import router as voice_router
 
-app = FastAPI(title="AppVoz — Motor Tutor por Voz", version="0.2.0")
+app = FastAPI(title="AppVoz — Motor Tutor por Voz", version="0.3.0")
+app.include_router(voice_router)
 
 
 # ---------- Salud ----------
 @app.get("/")
 async def root():
-    """Info básica del servicio."""
     return {
         "app": "AppVoz — Motor Tutor por Voz",
         "version": app.version,
+        "banco_de_voz": "/ui/",
         "docs": "/docs",
         "health": "/health",
     }
@@ -52,11 +56,9 @@ class SearchRequest(BaseModel):
 
 @app.post("/ingest")
 async def ingest(req: IngestRequest):
-    """Trocea el texto, genera embeddings y los guarda por subject_id."""
     chunks = chunk_text(req.content)
     if not chunks:
         return {"subject_id": req.subject_id, "chunks_inserted": 0}
-
     embeddings = await embed_texts(chunks, task_type="RETRIEVAL_DOCUMENT")
     async with engine.begin() as conn:
         for content, emb in zip(chunks, embeddings):
@@ -72,22 +74,9 @@ async def ingest(req: IngestRequest):
 
 @app.post("/search")
 async def search(req: SearchRequest):
-    """Búsqueda semántica: recupera los fragmentos más cercanos a la consulta,
-    aislados por subject_id (multitenancy)."""
-    q_emb = (await embed_texts([req.query], task_type="RETRIEVAL_QUERY"))[0]
-    async with engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    "SELECT content, round((1 - (embedding <=> CAST(:q AS vector)))::numeric, 4) AS score "
-                    "FROM chunks WHERE subject_id = :s "
-                    "ORDER BY embedding <=> CAST(:q AS vector) LIMIT :k"
-                ),
-                {"q": to_pgvector(q_emb), "s": req.subject_id, "k": req.k},
-            )
-        ).mappings().all()
-    return {
-        "query": req.query,
-        "subject_id": req.subject_id,
-        "results": [{"content": r["content"], "score": float(r["score"])} for r in rows],
-    }
+    results = await retrieve(req.subject_id, req.query, req.k)
+    return {"query": req.query, "subject_id": req.subject_id, "results": results}
+
+
+# El banco de pruebas de voz (estáticos). Se monta al final para no tapar la API.
+app.mount("/ui", StaticFiles(directory="static", html=True), name="ui")

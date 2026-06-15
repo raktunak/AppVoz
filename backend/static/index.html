@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AppVoz — Banco de pruebas de voz</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 24px auto; padding: 0 16px;
+         background:#0f1115; color:#e7e9ee; }
+  h1 { font-size: 1.3rem; } h2 { font-size: 1rem; color:#9aa3b2; margin-top:24px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0; }
+  input[type=text] { flex:1; min-width:200px; padding:10px; border-radius:8px; border:1px solid #2a2f3a;
+         background:#171a21; color:#e7e9ee; }
+  button { padding:10px 16px; border-radius:8px; border:1px solid #2a2f3a; background:#1f2530; color:#e7e9ee;
+         cursor:pointer; font-size:1rem; }
+  button:active { background:#2b3340; }
+  #talk { width:100%; padding:22px; font-size:1.1rem; background:#1b2b22; border-color:#2e6b4a; }
+  #talk.rec { background:#3a1b1b; border-color:#a33; }
+  .card { background:#171a21; border:1px solid #232834; border-radius:10px; padding:14px; margin:10px 0; }
+  .muted { color:#9aa3b2; } .big { font-size:1.05rem; }
+  table { width:100%; border-collapse:collapse; } td { padding:4px 8px; border-bottom:1px solid #232834; }
+  td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+  #status { min-height:1.2em; color:#9aa3b2; }
+</style>
+</head>
+<body>
+  <h1>🎙️ AppVoz — Banco de pruebas de voz</h1>
+  <p class="muted">Mide la latencia del pipeline en cascada (STT → RAG → Gemini Flash → TTS).</p>
+
+  <div class="row">
+    <label>Materia (subject_id):</label>
+    <input type="text" id="subject" value="demo_voz">
+  </div>
+
+  <button id="talk">🎤 Mantén pulsado para hablar</button>
+
+  <div class="row">
+    <input type="text" id="q" placeholder="…o escribe una pregunta (prueba sin micro)">
+    <button id="ask">Preguntar (texto)</button>
+  </div>
+
+  <div id="status"></div>
+
+  <h2>Conversación</h2>
+  <div class="card">
+    <div class="muted">Tú dijiste:</div><div id="transcript" class="big">—</div>
+    <div class="muted" style="margin-top:10px;">Tutor:</div><div id="answer" class="big">—</div>
+    <audio id="audio" controls style="width:100%; margin-top:10px;"></audio>
+  </div>
+
+  <h2>Latencia (último turno)</h2>
+  <div class="card"><table><tbody id="metrics"></tbody></table></div>
+
+  <h2>Histórico (media de <span id="nturns">0</span> turnos)</h2>
+  <div class="card"><table><tbody id="avg"></tbody></table></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
