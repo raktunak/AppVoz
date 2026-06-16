@@ -29,3 +29,6 @@ Thumbs.db
 
 # === Audio de depuración ===
 *.wav
+
+# === Guía de tooling local (fuera del repo) ===
+/CLAUDE.md
