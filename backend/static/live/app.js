@@ -3,7 +3,7 @@ let ws, micCtx, micStream, micNode, playCtx, nextTime = 0, sources = [], onCall 
 let curWho = null, curBubble = null;
 let accTokens = 0, nReports = 0;
 let accAudioIn = 0, accAudioOut = 0, accTextIn = 0, accTextOut = 0;
-let CAPS = {}, USD_EUR = 0.92;
+let CAPS = {}, USD_EUR = 0.92, VOICE_GENDERS = {};
 let sessionId = null;
 
 // ---- identidad de sesión ----
@@ -47,10 +47,19 @@ function fillSelect(sel, items, selected) {
     sel.appendChild(o);
   });
 }
+// Rellena el desplegable de voces del modelo actual, filtrado por género.
+function renderVoices() {
+  const c = CAPS[$("model").value]; if (!c) return;
+  const g = $("gender").value;
+  const filtradas = c.voices.filter((v) => g === "todas" || VOICE_GENDERS[v] === g);
+  const lista = filtradas.length ? filtradas : c.voices;  // si el filtro deja vacío, todas
+  const sel = lista.includes(c.default_voice) ? c.default_voice : lista[0];
+  fillSelect($("voice"), lista, sel);
+}
 function renderModel(model) {
   const c = CAPS[model]; if (!c) return;
   $("modelHint").textContent = c.label || "";
-  fillSelect($("voice"), c.voices, c.default_voice);
+  renderVoices();
   // Idioma: solo si el modelo lo admite
   if (c.language && c.language.configurable) {
     fillSelect($("language"), c.language.codes || [], c.language.default || "");
@@ -78,11 +87,13 @@ async function loadDefaults() {
     const d = await (await fetch("/api/live/defaults")).json();
     CAPS = d.caps || {};
     USD_EUR = d.usd_eur || USD_EUR;
+    VOICE_GENDERS = d.voice_genders || {};
     const models = (d.models || []).map((m) => ({ value: m, label: (CAPS[m] && CAPS[m].label) || m }));
     fillSelect($("model"), models, d.default_model);
     $("prompt").value = d.persona || "";
     renderModel(d.default_model);
     $("model").addEventListener("change", (e) => renderModel(e.target.value));
+    $("gender").addEventListener("change", renderVoices);
     $("prompt").addEventListener("input", schedulePromptCount);
     countPromptTokens();
     setStatus(`Listo · región ${d.location}. Edita el prompt y pulsa Iniciar.`);
@@ -93,6 +104,84 @@ async function loadDefaults() {
 function lockPanel(locked) {
   $("panel").classList.toggle("locked", locked);
   $("lockNote").textContent = locked ? "🔒 En llamada: cuelga para cambiar ajustes." : "";
+}
+
+// ---- historial de conversaciones guardadas ----
+let activeHistId = null;
+// Convierte un ISO 8601 a algo legible en es-ES; "—" si no hay fecha.
+function fmtFecha(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString("es-ES", {
+    day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+}
+// Pinta la lista de sesiones del usuario en #history.
+async function loadHistory() {
+  const cont = $("history");
+  try {
+    const r = await fetch("/api/live/sessions?user_id=" + encodeURIComponent(getUserId()) + "&limit=20");
+    const j = await r.json();
+    const sesiones = j.sessions || [];
+    cont.innerHTML = "";
+    if (!sesiones.length) {
+      const e = document.createElement("div");
+      e.className = "hist-empty"; e.textContent = "Sin conversaciones guardadas";
+      cont.appendChild(e);
+      return;
+    }
+    sesiones.forEach((s) => {
+      const item = document.createElement("div");
+      item.className = "hist-item";
+      if (s.id === activeHistId) item.classList.add("active");
+      item.dataset.id = s.id;
+
+      const fecha = document.createElement("div");
+      fecha.className = "h-date"; fecha.textContent = fmtFecha(s.started_at);
+
+      const meta = document.createElement("div");
+      meta.className = "h-meta";
+      meta.textContent = (s.n_turnos || 0) + " turno" + ((s.n_turnos === 1) ? "" : "s");
+
+      item.appendChild(fecha); item.appendChild(meta);
+
+      if (s.preview) {
+        const pv = document.createElement("div");
+        pv.className = "h-preview"; pv.textContent = s.preview;
+        item.appendChild(pv);
+      }
+
+      item.addEventListener("click", () => verConversacion(s.id));
+      cont.appendChild(item);
+    });
+  } catch (e) {
+    cont.innerHTML = "";
+    const err = document.createElement("div");
+    err.className = "hist-empty"; err.textContent = "No pude cargar el historial.";
+    cont.appendChild(err);
+  }
+}
+// Carga una sesión guardada en el chat (solo lectura). No toca la llamada en vivo.
+async function verConversacion(id) {
+  if (onCall) return; // no pisar una llamada en curso
+  try {
+    const r = await fetch("/api/live/sessions/" + id);
+    if (!r.ok) { setStatus("No pude abrir la conversación."); return; }
+    const j = await r.json();
+    clearChat();
+    (j.turnos || []).forEach((t) => {
+      if (t.user_text) addChunk("user", t.user_text);
+      if (t.bot_text) addChunk("bot", t.bot_text);
+    });
+    activeHistId = id;
+    document.querySelectorAll("#history .hist-item").forEach((el) => {
+      el.classList.toggle("active", Number(el.dataset.id) === id);
+    });
+    setStatus("Viendo conversación guardada (" + fmtFecha(j.started_at) + ").");
+  } catch (e) {
+    setStatus("No pude abrir la conversación: " + e);
+  }
 }
 
 // ---- tamaño del prompt (tokens reales vía count_tokens; estimación local si la API falla) ----
@@ -206,7 +295,8 @@ function toPCM16(f32) {
 
 async function start() {
   ensurePlay();
-  clearChat();
+  // NO se limpia el chat: la conversación se conserva entre llamadas (se va añadiendo).
+  activeHistId = null;   // al iniciar una llamada nueva, ya no estamos viendo historial
   resetUsage();
   sessionId = newId(); // session_id nuevo en cada llamada
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -278,6 +368,8 @@ function hangup() {
   lockPanel(false);
   $("call").textContent = "☎ Iniciar llamada"; $("call").classList.remove("on");
   setStatus("Llamada finalizada.");
+  // La persistencia ocurre al cerrar el WS en el servidor; damos margen a que se guarde.
+  setTimeout(loadHistory, 1800);
 }
 
 $("call").addEventListener("click", async () => {
@@ -288,4 +380,4 @@ $("call").addEventListener("click", async () => {
   try { await start(); } catch (e) { setStatus("Error: " + e); hangup(); }
 });
 
-loadDefaults();
+loadDefaults().then(loadHistory);

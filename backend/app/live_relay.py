@@ -18,7 +18,7 @@ import asyncio
 import json
 import os
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from google import genai
 from google.genai import types
 from loguru import logger
@@ -64,6 +64,21 @@ CASCADE_LANGS = [
 PRICING_25 = {"audio_in": 3.0, "audio_out": 12.0, "text_in": 0.5, "text_out": 2.0}
 USD_EUR = 0.92  # conversión aproximada (el cambio fluctúa)
 
+# Género de cada voz (doc oficial de Google Cloud TTS, columna "Gender"). Para filtrar
+# el desplegable del panel: femenina | masculina.
+VOICE_GENDER = {
+    "Puck": "masculina", "Charon": "masculina", "Kore": "femenina", "Fenrir": "masculina",
+    "Aoede": "femenina", "Leda": "femenina", "Orus": "masculina", "Zephyr": "femenina",
+    "Callirrhoe": "femenina", "Autonoe": "femenina", "Enceladus": "masculina",
+    "Iapetus": "masculina", "Umbriel": "masculina", "Algieba": "masculina",
+    "Despina": "femenina", "Erinome": "femenina", "Algenib": "masculina",
+    "Rasalgethi": "masculina", "Laomedeia": "femenina", "Achernar": "femenina",
+    "Alnilam": "masculina", "Schedar": "masculina", "Gacrux": "femenina",
+    "Pulcherrima": "femenina", "Achird": "masculina", "Zubenelgenubi": "masculina",
+    "Vindemiatrix": "femenina", "Sadachbia": "masculina", "Sadaltager": "masculina",
+    "Sulafat": "femenina",
+}
+
 MODELS_CAPS = {
     "gemini-live-2.5-flash-native-audio": {
         "label": "2.5 Flash · Native Audio — más inmersivo (afecto + proactividad)",
@@ -107,6 +122,7 @@ async def live_defaults():
         "models": MODELS,
         "default_model": DEFAULT_MODEL,
         "caps": MODELS_CAPS,
+        "voice_genders": VOICE_GENDER,
         "persona": SALON_PERSONA,
         "location": settings.gcp_live_location,
         "usd_eur": USD_EUR,
@@ -126,6 +142,22 @@ async def count_tokens(payload: dict):
     except Exception as e:
         logger.exception("count_tokens fallo")
         return {"tokens": None, "error": str(e)}
+
+
+@router.get("/api/live/sessions")
+async def listar_sesiones(user_id: str, limit: int = 20):
+    """Historial de conversaciones de un usuario (la más reciente primero)."""
+    sesiones = await persistence.listar_sesiones(user_id, limit)
+    return {"sessions": sesiones}
+
+
+@router.get("/api/live/sessions/{session_id}")
+async def obtener_sesion(session_id: int):
+    """Detalle de una sesión con todos sus turnos. 404 si no existe."""
+    sesion = await persistence.obtener_sesion(session_id)
+    if sesion is None:
+        raise HTTPException(status_code=404, detail="sesión no encontrada")
+    return sesion
 
 
 def _build_config(cfg: dict) -> tuple[str, types.LiveConnectConfig]:

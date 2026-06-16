@@ -46,6 +46,17 @@
   .msg .who { font-size:.7rem; opacity:.7; margin-bottom:2px; }
   .msg.user { align-self:flex-end; background:#1f3a52; border-bottom-right-radius:4px; }
   .msg.bot  { align-self:flex-start; background:#1f3a2a; border-bottom-left-radius:4px; }
+
+  #history { max-height:260px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
+  .hist-item { background:#0c0f15; border:1px solid #232834; border-radius:8px; padding:7px 9px;
+               cursor:pointer; font-size:.8rem; transition:background .12s, border-color .12s; }
+  .hist-item:hover { background:#161a22; border-color:#2e6b4a; }
+  .hist-item.active { background:#152a1f; border-color:#3a8c5e; }
+  .hist-item .h-date { color:#c5ccd8; font-weight:600; }
+  .hist-item .h-meta { color:#7f8a9b; font-size:.72rem; margin-top:1px; }
+  .hist-item .h-preview { color:#9aa3b2; font-size:.74rem; margin-top:3px;
+               overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .hist-empty { color:#7f8a9b; font-size:.78rem; font-style:italic; padding:4px 2px; }
 </style>
 </head>
 <body>
@@ -58,7 +69,12 @@
     <div class="hint" id="modelHint"></div>
 
     <h2>Voz</h2>
-    <select id="voice"></select>
+    <select id="gender">
+      <option value="todas">Todas las voces</option>
+      <option value="femenina">Femeninas</option>
+      <option value="masculina">Masculinas</option>
+    </select>
+    <select id="voice" style="margin-top:6px"></select>
 
     <div id="langBox">
       <h2>Idioma</h2>
@@ -94,6 +110,9 @@
       <div class="row" style="margin-top:6px"><span>Coste sesión (≈ €)</span><b id="uCost">—</b></div>
       <div class="hint" id="priceHint"></div>
     </div>
+
+    <h2>Historial</h2>
+    <div id="history"></div>
   </aside>
 
   <main id="main">

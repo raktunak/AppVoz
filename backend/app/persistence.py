@@ -181,6 +181,99 @@ async def cerrar_sesion(session_id: int, n_turnos: int) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Lectura del historial — para que el frontend liste y muestre conversaciones.
+# --------------------------------------------------------------------------- #
+async def listar_sesiones(user_id: str, limit: int = 20) -> list[dict]:
+    """Lista las sesiones de un usuario, la más reciente primero.
+
+    Por cada sesión devuelve: id, via, subject_id, started_at, ended_at (ISO
+    string o None), n_turnos y `preview` (el primer user_text no nulo de la
+    sesión, vía subconsulta). Los timestamps se serializan a ISO string para
+    que la respuesta sea directamente JSON-serializable."""
+    async with engine.connect() as conn:
+        filas = (
+            await conn.execute(
+                text(
+                    "SELECT s.id, s.via, s.subject_id, s.started_at, s.ended_at, "
+                    "s.n_turnos, "
+                    "(SELECT user_text FROM turnos "
+                    " WHERE session_id = s.id AND user_text IS NOT NULL "
+                    " ORDER BY idx LIMIT 1) AS preview "
+                    "FROM sesiones s "
+                    "WHERE s.user_id = :u "
+                    "ORDER BY s.started_at DESC "
+                    "LIMIT :limit"
+                ),
+                {"u": user_id, "limit": limit},
+            )
+        ).mappings().all()
+
+    out: list[dict] = []
+    for f in filas:
+        started = f["started_at"]
+        ended = f["ended_at"]
+        out.append(
+            {
+                "id": int(f["id"]),
+                "via": f["via"],
+                "subject_id": f["subject_id"],
+                "started_at": started.isoformat() if started else None,
+                "ended_at": ended.isoformat() if ended else None,
+                "n_turnos": f["n_turnos"],
+                "preview": f["preview"],
+            }
+        )
+    return out
+
+
+async def obtener_sesion(session_id: int) -> dict | None:
+    """Devuelve una sesión con todos sus turnos (en orden idx, ts) o None si no
+    existe. Los timestamps se serializan a ISO string."""
+    async with engine.connect() as conn:
+        ses = (
+            await conn.execute(
+                text(
+                    "SELECT id, via, subject_id, started_at, ended_at, n_turnos "
+                    "FROM sesiones WHERE id = :id"
+                ),
+                {"id": session_id},
+            )
+        ).mappings().first()
+        if not ses:
+            return None
+        filas = (
+            await conn.execute(
+                text(
+                    "SELECT idx, user_text, bot_text, ts FROM turnos "
+                    "WHERE session_id = :id ORDER BY idx, ts"
+                ),
+                {"id": session_id},
+            )
+        ).mappings().all()
+
+    turnos = [
+        {
+            "idx": f["idx"],
+            "user_text": f["user_text"],
+            "bot_text": f["bot_text"],
+            "ts": f["ts"].isoformat() if f["ts"] else None,
+        }
+        for f in filas
+    ]
+    started = ses["started_at"]
+    ended = ses["ended_at"]
+    return {
+        "id": int(ses["id"]),
+        "via": ses["via"],
+        "subject_id": ses["subject_id"],
+        "started_at": started.isoformat() if started else None,
+        "ended_at": ended.isoformat() if ended else None,
+        "n_turnos": ses["n_turnos"],
+        "turnos": turnos,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Resumen + memoria — BEST-EFFORT: nunca lanza (todo en try/except con loguru).
 # --------------------------------------------------------------------------- #
 _RESUMEN_PROMPT = (
