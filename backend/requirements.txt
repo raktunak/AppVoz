@@ -9,8 +9,15 @@ sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 pgvector==0.3.6
 
-# IA (Gemini / embeddings) — SDK nuevo de Google GenAI
-google-genai==1.2.0
+# IA (Gemini / embeddings) — SDK nuevo de Google GenAI (sin pin: compat con pipecat 1.x)
+google-genai
+
+# TTS en streaming (Chirp 3 HD) — Google Cloud
+google-cloud-texttospeech>=2.21.0
+
+# Voz en llamada (full-duplex): Pipecat + Gemini Live + WebRTC + VAD
+pipecat-ai[google,silero,webrtc]>=1.3.0
+pipecat-ai-small-webrtc-prebuilt
 
 # La capa de voz (Pipecat + STT/TTS) se añade en la siguiente fase:
 # pipecat-ai[google,silero]

@@ -6,11 +6,31 @@ from sqlalchemy import text
 from .chunking import chunk_text
 from .db import engine
 from .embeddings import embed_texts, to_pgvector
+from .live_relay import router as live_router
 from .rag import retrieve
 from .voice import router as voice_router
 
-app = FastAPI(title="AppVoz — Motor Tutor por Voz", version="0.3.0")
+app = FastAPI(title="AppVoz — Motor Tutor por Voz", version="0.5.0")
 app.include_router(voice_router)
+app.include_router(live_router)  # /ws/call (Gemini Live directo)
+
+
+@app.on_event("startup")
+async def _startup():
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS conversaciones ("
+                "id BIGSERIAL PRIMARY KEY, etiqueta TEXT, started_at TIMESTAMPTZ DEFAULT now())"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS mensajes ("
+                "id BIGSERIAL PRIMARY KEY, conversacion_id BIGINT, role TEXT, "
+                "texto TEXT, ts TIMESTAMPTZ DEFAULT now())"
+            )
+        )
 
 
 # ---------- Salud ----------
@@ -19,9 +39,9 @@ async def root():
     return {
         "app": "AppVoz — Motor Tutor por Voz",
         "version": app.version,
-        "banco_de_voz": "/ui/",
+        "llamada": "/call/",
+        "banco_voz": "/ui/",
         "docs": "/docs",
-        "health": "/health",
     }
 
 
@@ -78,5 +98,6 @@ async def search(req: SearchRequest):
     return {"query": req.query, "subject_id": req.subject_id, "results": results}
 
 
-# El banco de pruebas de voz (estáticos). Se monta al final para no tapar la API.
+# Frontends estáticos: llamada directa (/call) y banco de voz v1 (/ui)
+app.mount("/call", StaticFiles(directory="static/live", html=True), name="call")
 app.mount("/ui", StaticFiles(directory="static", html=True), name="ui")

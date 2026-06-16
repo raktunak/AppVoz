@@ -2,9 +2,29 @@ const $ = (id) => document.getElementById(id);
 let ctx, stream, proc, source, frames = [], recording = false;
 const history = [];
 
+// ---------- Reproductor PCM en streaming ----------
+let playCtx = null, nextTime = 0;
+function ensurePlay() {
+  if (!playCtx) playCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (playCtx.state === "suspended") playCtx.resume();
+}
+function playPCM(int16, rate) {
+  const f32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 32768;
+  const buf = playCtx.createBuffer(1, f32.length, rate);
+  buf.copyToChannel(f32, 0);
+  const src = playCtx.createBufferSource();
+  src.buffer = buf; src.connect(playCtx.destination);
+  const now = playCtx.currentTime;
+  if (nextTime < now) nextTime = now + 0.03;
+  src.start(nextTime);
+  nextTime += buf.duration;
+}
+
 // ---------- Grabación (push-to-talk) ----------
 async function startRec() {
   if (recording) return;
+  ensurePlay();
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
@@ -17,13 +37,12 @@ async function startRec() {
   proc.onaudioprocess = (e) => {
     if (recording) frames.push(new Float32Array(e.inputBuffer.getChannelData(0)));
   };
-  source.connect(proc);
-  proc.connect(ctx.destination);
+  source.connect(proc); proc.connect(ctx.destination);
   recording = true;
   const b = $("talk"); b.classList.add("rec"); b.textContent = "🔴 Grabando… suelta para enviar";
 }
 
-async function stopRec() {
+function stopRec() {
   if (!recording) return;
   recording = false;
   const srcRate = ctx.sampleRate;
@@ -31,8 +50,8 @@ async function stopRec() {
   stream.getTracks().forEach((t) => t.stop());
   const b = $("talk"); b.classList.remove("rec"); b.textContent = "🎤 Mantén pulsado para hablar";
   const wav = encodeWAV(flatten(frames), srcRate, 16000);
-  if (wav.size < 2000) { $("status").textContent = "Audio demasiado corto."; return; }
-  await send({ audioBlob: wav });
+  if (wav.byteLength < 2000) { $("status").textContent = "Audio demasiado corto."; return; }
+  runTurn((ws) => ws.send(wav));
 }
 
 function flatten(arrs) {
@@ -41,11 +60,9 @@ function flatten(arrs) {
   let o = 0; for (const a of arrs) { out.set(a, o); o += a.length; }
   return out;
 }
-
 function downsample(buf, srcRate, dstRate) {
   if (dstRate >= srcRate) return buf;
-  const ratio = srcRate / dstRate;
-  const newLen = Math.round(buf.length / ratio);
+  const ratio = srcRate / dstRate, newLen = Math.round(buf.length / ratio);
   const out = new Float32Array(newLen);
   let oi = 0, ii = 0;
   while (oi < newLen) {
@@ -56,10 +73,10 @@ function downsample(buf, srcRate, dstRate) {
   }
   return out;
 }
-
 function encodeWAV(buf, srcRate, dstRate) {
   const d = downsample(buf, srcRate, dstRate);
-  const dv = new DataView(new ArrayBuffer(44 + d.length * 2));
+  const ab = new ArrayBuffer(44 + d.length * 2);
+  const dv = new DataView(ab);
   let p = 0;
   const str = (s) => { for (let i = 0; i < s.length; i++) dv.setUint8(p++, s.charCodeAt(i)); };
   str("RIFF"); dv.setUint32(p, 36 + d.length * 2, true); p += 4; str("WAVE");
@@ -71,44 +88,47 @@ function encodeWAV(buf, srcRate, dstRate) {
     const s = Math.max(-1, Math.min(1, d[i]));
     dv.setInt16(p, s < 0 ? s * 0x8000 : s * 0x7fff, true); p += 2;
   }
-  return new Blob([dv], { type: "audio/wav" });
+  return ab;
 }
 
-// ---------- Envío ----------
-async function send({ audioBlob, textQ }) {
-  const fd = new FormData();
-  fd.append("subject_id", $("subject").value.trim() || "demo_voz");
-  if (audioBlob) fd.append("audio", audioBlob, "turn.wav");
-  if (textQ) fd.append("text_input", textQ);
-  $("status").textContent = "⏳ Procesando…";
-  const t0 = performance.now();
-  try {
-    const r = await fetch("/voice/turn", { method: "POST", body: fd });
-    const j = await r.json();
-    if (!r.ok) { $("status").textContent = "Error: " + JSON.stringify(j); return; }
-    j.metrics.network_ms = Math.round(performance.now() - t0);
-    render(j);
-    $("status").textContent = "✅ Listo";
-  } catch (e) { $("status").textContent = "Error: " + e; }
+// ---------- Turno por WebSocket (streaming) ----------
+function runTurn(sendFn) {
+  ensurePlay(); nextTime = 0;
+  const subject = $("subject").value.trim() || "demo_voz";
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/voice/ws?subject_id=${encodeURIComponent(subject)}`);
+  ws.binaryType = "arraybuffer";
+  let rate = 24000, t0 = 0, firstAudio = null;
+  $("transcript").textContent = "…"; $("answer").textContent = "…";
+  ws.onopen = () => { t0 = performance.now(); $("status").textContent = "⏳ Procesando…"; sendFn(ws); };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      const j = JSON.parse(ev.data);
+      if (j.type === "transcript") $("transcript").textContent = j.text || "(vacío)";
+      else if (j.type === "answer") $("answer").textContent = j.text || "";
+      else if (j.type === "audio_start") rate = j.sample_rate || 24000;
+      else if (j.type === "metrics") {
+        if (firstAudio !== null) j.metrics.client_ttfa_ms = Math.round(firstAudio - t0);
+        renderMetrics(j.metrics); $("status").textContent = "✅ Listo";
+      }
+    } else {
+      if (firstAudio === null) firstAudio = performance.now();
+      playPCM(new Int16Array(ev.data), rate);
+    }
+  };
+  ws.onerror = () => { $("status").textContent = "Error de conexión WS"; };
 }
 
-function render(j) {
-  $("transcript").textContent = j.transcript || "(vacío)";
-  $("answer").textContent = j.answer || "";
-  const audio = $("audio");
-  audio.src = "data:audio/wav;base64," + j.audio_wav_b64;
-  audio.play().catch(() => {});
-  const order = ["stt_ms", "retrieval_ms", "llm_ttft_ms", "llm_total_ms", "tts_ms", "total_ms", "network_ms"];
-  const m = j.metrics;
+function renderMetrics(m) {
+  const order = ["stt_ms", "retrieval_ms", "llm_ttft_ms", "llm_total_ms",
+    "tts_first_ms", "ttfa_ms", "total_ms", "client_ttfa_ms"];
   $("metrics").innerHTML = order.filter((k) => k in m)
     .map((k) => `<tr><td>${k}</td><td>${m[k]} ms</td></tr>`).join("");
-  history.push(m);
-  renderAvg();
+  history.push(m); renderAvg();
 }
-
 function renderAvg() {
   $("nturns").textContent = history.length;
-  const keys = ["stt_ms", "retrieval_ms", "llm_ttft_ms", "llm_total_ms", "tts_ms", "total_ms"];
+  const keys = ["stt_ms", "retrieval_ms", "llm_total_ms", "ttfa_ms", "total_ms"];
   $("avg").innerHTML = keys.map((k) => {
     const vals = history.map((h) => h[k]).filter((v) => typeof v === "number");
     if (!vals.length) return "";
@@ -125,6 +145,7 @@ talk.addEventListener("mouseleave", () => recording && stopRec());
 talk.addEventListener("touchstart", (e) => { e.preventDefault(); startRec(); });
 talk.addEventListener("touchend", (e) => { e.preventDefault(); stopRec(); });
 $("ask").addEventListener("click", () => {
-  const q = $("q").value.trim(); if (q) send({ textQ: q });
+  const q = $("q").value.trim();
+  if (q) runTurn((ws) => ws.send(JSON.stringify({ text: q, subject_id: $("subject").value.trim() || "demo_voz" })));
 });
 $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ask").click(); });

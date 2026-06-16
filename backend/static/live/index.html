@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AppVoz · Llamada (Gemini Live directo)</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: system-ui, sans-serif; max-width: 560px; margin: 0 auto; padding: 16px;
+         background:#0f1115; color:#e7e9ee; display:flex; flex-direction:column; height:100vh;
+         box-sizing:border-box; }
+  h1 { font-size: 1.1rem; margin: 4px 0; }
+  .muted { color:#9aa3b2; font-size:.85rem; margin: 2px 0 10px; }
+  button { padding: 13px 20px; border-radius: 10px; border:1px solid #2a2f3a; font-size:1.05rem;
+           cursor:pointer; color:#e7e9ee; background:#1b2b22; border-color:#2e6b4a; }
+  button.on { background:#3a1b1b; border-color:#a33; }
+  #status { margin:10px 0; color:#9aa3b2; min-height:1.1em; font-size:.9rem; }
+  /* Chat con scroll propio (estilo WhatsApp) */
+  #chat { flex:1; min-height:0; overflow-y:auto; background:#10131a; border:1px solid #232834;
+          border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px; }
+  .msg { max-width:80%; padding:8px 12px; border-radius:14px; line-height:1.35; word-wrap:break-word; }
+  .msg .who { font-size:.7rem; opacity:.7; margin-bottom:2px; }
+  .msg.user { align-self:flex-end; background:#1f3a52; border-bottom-right-radius:4px; }
+  .msg.bot  { align-self:flex-start; background:#1f3a2a; border-bottom-left-radius:4px; }
+</style>
+</head>
+<body>
+  <h1>🎙️ AppVoz · Llamada con Lucía</h1>
+  <div class="muted">Gemini Live directo. Habla normal, en español.</div>
+  <div><button id="call">☎ Iniciar llamada</button></div>
+  <div id="status">Listo.</div>
+  <div id="chat"></div>
+  <script src="app.js"></script>
+</body>
+</html>

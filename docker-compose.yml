@@ -24,6 +24,9 @@ services:
     build: ./backend
     container_name: appvoz-api
     restart: unless-stopped
+    # ws-ping-timeout alto: evita que uvicorn corte el WebSocket bajo audio continuo
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080",
+              "--reload", "--ws-ping-interval", "20", "--ws-ping-timeout", "300"]
     env_file: .env
     environment:
       # dentro de la red de compose el host de la DB es "db"
