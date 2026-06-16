@@ -4,6 +4,20 @@ let curWho = null, curBubble = null;
 let accTokens = 0, nReports = 0;
 let accAudioIn = 0, accAudioOut = 0, accTextIn = 0, accTextOut = 0;
 let CAPS = {}, USD_EUR = 0.92;
+let sessionId = null;
+
+// ---- identidad de sesión ----
+function newId() {
+  return (crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : "u-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+}
+// user_id persistente entre llamadas (localStorage); session_id nuevo por llamada.
+function getUserId() {
+  let id = localStorage.getItem("appvoz_user_id");
+  if (!id) { id = newId(); localStorage.setItem("appvoz_user_id", id); }
+  return id;
+}
 
 function setStatus(s) { $("status").textContent = s; }
 function clearChat() { $("chat").innerHTML = ""; curWho = null; curBubble = null; }
@@ -194,6 +208,7 @@ async function start() {
   ensurePlay();
   clearChat();
   resetUsage();
+  sessionId = newId(); // session_id nuevo en cada llamada
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws/call`);
   ws.binaryType = "arraybuffer";
@@ -202,6 +217,9 @@ async function start() {
   ws.onopen = () => {
     ws.send(JSON.stringify({
       type: "config",
+      user_id: getUserId(),
+      session_id: sessionId,
+      subject_id: "demo",
       model: $("model").value,
       voice: $("voice").value,
       language: $("language").value,

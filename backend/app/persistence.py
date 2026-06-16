@@ -1,0 +1,291 @@
+"""Persistencia de la Fase 1: sesiones, turnos y memoria por usuario.
+
+Guarda CADA conversación (sea cual sea la vía de voz) y sus turnos con la
+instrumentación de latencia, y mantiene una memoria acumulada por (user_id,
+subject_id) que se actualiza al cerrar cada sesión con un resumen generado por
+Gemini Flash.
+
+Sigue el mismo patrón de la capa de datos del proyecto: SQLAlchemy 2.0 async +
+asyncpg, SQL crudo vía `text()`, acceso por `engine` (`async with
+engine.begin()` para escrituras transaccionales, `engine.connect()` para
+lecturas). Ver `main.py` (/ingest, DDL de startup) y `rag.py`.
+"""
+import asyncio
+import json
+
+from google import genai
+from google.genai import types
+from loguru import logger
+from sqlalchemy import text
+
+from .config import settings
+from .db import engine
+
+# Cliente Gemini (Developer API por API key) para el resumen best-effort.
+# Mismo patrón que embeddings.py: cliente a nivel de módulo.
+_client = genai.Client(api_key=settings.google_api_key)
+
+# Modelo para resumir la sesión. Flash: barato y suficiente para esta tarea.
+RESUMEN_MODEL = "gemini-2.5-flash"
+
+
+# --------------------------------------------------------------------------- #
+# DDL — idempotente (CREATE ... IF NOT EXISTS). Se llama en el startup de la app.
+# --------------------------------------------------------------------------- #
+_DDL = [
+    # Una fila por conversación (independiente de la vía de voz).
+    """
+    CREATE TABLE IF NOT EXISTS sesiones (
+        id          BIGSERIAL PRIMARY KEY,
+        subject_id  TEXT NOT NULL,
+        user_id     TEXT NOT NULL DEFAULT 'anonimo',
+        via         TEXT NOT NULL,
+        etiqueta    TEXT,
+        started_at  TIMESTAMPTZ DEFAULT now(),
+        ended_at    TIMESTAMPTZ,
+        n_turnos    INT NOT NULL DEFAULT 0
+    )
+    """,
+    # Un turno = un intercambio (lo dicho por el usuario + respuesta del bot) con
+    # su instrumentación de latencia. chunks: fragmentos RAG usados para anclar.
+    """
+    CREATE TABLE IF NOT EXISTS turnos (
+        id            BIGSERIAL PRIMARY KEY,
+        session_id    BIGINT NOT NULL REFERENCES sesiones(id) ON DELETE CASCADE,
+        idx           INT NOT NULL,
+        user_text     TEXT,
+        bot_text      TEXT,
+        grounded      BOOLEAN,
+        chunks        JSONB NOT NULL DEFAULT '[]',
+        stt_ms        INT,
+        retrieval_ms  INT,
+        llm_ttft_ms   INT,
+        llm_total_ms  INT,
+        tts_first_ms  INT,
+        ttfa_ms       INT,
+        total_ms      INT,
+        error         TEXT,
+        ts            TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    # Memoria acumulada por (usuario, materia): resumen, temas vistos y dudas.
+    """
+    CREATE TABLE IF NOT EXISTS memoria_usuario (
+        id                BIGSERIAL PRIMARY KEY,
+        user_id           TEXT NOT NULL,
+        subject_id        TEXT NOT NULL,
+        resumen           TEXT,
+        temas             JSONB NOT NULL DEFAULT '[]',
+        dudas             JSONB NOT NULL DEFAULT '[]',
+        n_sesiones        INT NOT NULL DEFAULT 0,
+        ultima_session_id BIGINT REFERENCES sesiones(id),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (user_id, subject_id)
+    )
+    """,
+    # Índices: lecturas típicas (memoria por usuario+materia, sesiones por
+    # materia, turnos de una sesión en orden temporal).
+    "CREATE INDEX IF NOT EXISTS idx_sesiones_user_subject ON sesiones (user_id, subject_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sesiones_subject ON sesiones (subject_id)",
+    "CREATE INDEX IF NOT EXISTS idx_turnos_session ON turnos (session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_turnos_ts ON turnos (ts)",
+]
+
+
+async def crear_tablas() -> None:
+    """Crea las 3 tablas e índices de la Fase 1. Idempotente (IF NOT EXISTS).
+    Pensada para llamarse en el `startup` de la aplicación."""
+    async with engine.begin() as conn:
+        for ddl in _DDL:
+            await conn.execute(text(ddl))
+
+
+async def crear_sesion(
+    subject_id: str, user_id: str, via: str, etiqueta: str | None = None
+) -> int:
+    """Abre una sesión y devuelve su id. `via` identifica la vía de voz usada
+    (p.ej. 'live', 'cascada')."""
+    async with engine.begin() as conn:
+        nuevo_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO sesiones (subject_id, user_id, via, etiqueta) "
+                    "VALUES (:subject_id, :user_id, :via, :etiqueta) "
+                    "RETURNING id"
+                ),
+                {
+                    "subject_id": subject_id,
+                    "user_id": user_id,
+                    "via": via,
+                    "etiqueta": etiqueta,
+                },
+            )
+        ).scalar_one()
+    return int(nuevo_id)
+
+
+async def guardar_turnos(session_id: int, turnos: list[dict]) -> int:
+    """Inserta N turnos de una sesión en una sola transacción y devuelve cuántos.
+
+    Cada dict puede traer: idx, user_text, bot_text, grounded, chunks (list),
+    stt_ms, retrieval_ms, llm_ttft_ms, llm_total_ms, tts_first_ms, ttfa_ms,
+    total_ms, error. Lo que falte queda NULL (y chunks como '[]')."""
+    if not turnos:
+        return 0
+    async with engine.begin() as conn:
+        for t in turnos:
+            await conn.execute(
+                text(
+                    "INSERT INTO turnos ("
+                    "session_id, idx, user_text, bot_text, grounded, chunks, "
+                    "stt_ms, retrieval_ms, llm_ttft_ms, llm_total_ms, "
+                    "tts_first_ms, ttfa_ms, total_ms, error"
+                    ") VALUES ("
+                    ":session_id, :idx, :user_text, :bot_text, :grounded, "
+                    "CAST(:chunks AS jsonb), "
+                    ":stt_ms, :retrieval_ms, :llm_ttft_ms, :llm_total_ms, "
+                    ":tts_first_ms, :ttfa_ms, :total_ms, :error"
+                    ")"
+                ),
+                {
+                    "session_id": session_id,
+                    "idx": t.get("idx"),
+                    "user_text": t.get("user_text"),
+                    "bot_text": t.get("bot_text"),
+                    "grounded": t.get("grounded"),
+                    # chunks viaja como literal JSON casteado a jsonb (igual que
+                    # los vectores van como literal casteado a vector en rag.py).
+                    "chunks": json.dumps(t.get("chunks") or []),
+                    "stt_ms": t.get("stt_ms"),
+                    "retrieval_ms": t.get("retrieval_ms"),
+                    "llm_ttft_ms": t.get("llm_ttft_ms"),
+                    "llm_total_ms": t.get("llm_total_ms"),
+                    "tts_first_ms": t.get("tts_first_ms"),
+                    "ttfa_ms": t.get("ttfa_ms"),
+                    "total_ms": t.get("total_ms"),
+                    "error": t.get("error"),
+                },
+            )
+    return len(turnos)
+
+
+async def cerrar_sesion(session_id: int, n_turnos: int) -> None:
+    """Marca la sesión como terminada (ended_at = now()) y fija su nº de turnos."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE sesiones SET ended_at = now(), n_turnos = :n WHERE id = :id"
+            ),
+            {"n": n_turnos, "id": session_id},
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Resumen + memoria — BEST-EFFORT: nunca lanza (todo en try/except con loguru).
+# --------------------------------------------------------------------------- #
+_RESUMEN_PROMPT = (
+    "Eres un asistente que resume una sesión de tutoría por voz para guardarla "
+    "como memoria del alumno. A partir de la transcripción (usuario y tutor), "
+    "devuelve EXCLUSIVAMENTE un JSON válido con esta forma exacta:\n"
+    '{"resumen": "<resumen breve de 1-3 frases>", '
+    '"temas": ["<tema>", ...], '
+    '"dudas": ["<duda no resuelta>", ...]}\n'
+    "No añadas texto fuera del JSON. Si no hay dudas, usa una lista vacía.\n\n"
+    "Transcripción:\n"
+)
+
+
+def _resumir_sync(transcripcion: str) -> dict:
+    """Llama a Gemini Flash y parsea el JSON del resumen (síncrono; se invoca en
+    un hilo desde la corutina). Pide salida JSON al modelo."""
+    resp = _client.models.generate_content(
+        model=RESUMEN_MODEL,
+        contents=_RESUMEN_PROMPT + transcripcion,
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    return json.loads(resp.text)
+
+
+async def resumir_sesion(session_id: int) -> None:
+    """Genera el resumen de la sesión y lo vuelca en memoria_usuario (UPSERT por
+    user_id+subject_id). BEST-EFFORT: cualquier fallo se loguea y se traga; nunca
+    lanza, para no romper el cierre de la llamada."""
+    try:
+        # 1) Datos de la sesión y sus turnos (en orden).
+        async with engine.connect() as conn:
+            ses = (
+                await conn.execute(
+                    text(
+                        "SELECT subject_id, user_id FROM sesiones WHERE id = :id"
+                    ),
+                    {"id": session_id},
+                )
+            ).mappings().first()
+            if not ses:
+                logger.warning(f"resumir_sesion: sesión {session_id} no existe")
+                return
+            filas = (
+                await conn.execute(
+                    text(
+                        "SELECT user_text, bot_text FROM turnos "
+                        "WHERE session_id = :id ORDER BY idx, ts"
+                    ),
+                    {"id": session_id},
+                )
+            ).mappings().all()
+
+        if not filas:
+            logger.info(f"resumir_sesion: sesión {session_id} sin turnos; nada que resumir")
+            return
+
+        subject_id = ses["subject_id"]
+        user_id = ses["user_id"]
+
+        # 2) Construir la transcripción y pedir el resumen a Gemini (en hilo).
+        lineas = []
+        for f in filas:
+            if f["user_text"]:
+                lineas.append(f"Usuario: {f['user_text']}")
+            if f["bot_text"]:
+                lineas.append(f"Tutor: {f['bot_text']}")
+        transcripcion = "\n".join(lineas)
+
+        datos = await asyncio.to_thread(_resumir_sync, transcripcion)
+        resumen = datos.get("resumen") or ""
+        temas = datos.get("temas") or []
+        dudas = datos.get("dudas") or []
+
+        # 3) UPSERT en memoria_usuario por (user_id, subject_id).
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO memoria_usuario ("
+                    "user_id, subject_id, resumen, temas, dudas, "
+                    "n_sesiones, ultima_session_id, updated_at"
+                    ") VALUES ("
+                    ":user_id, :subject_id, :resumen, "
+                    "CAST(:temas AS jsonb), CAST(:dudas AS jsonb), "
+                    "1, :session_id, now()"
+                    ") ON CONFLICT (user_id, subject_id) DO UPDATE SET "
+                    "resumen = EXCLUDED.resumen, "
+                    "temas = EXCLUDED.temas, "
+                    "dudas = EXCLUDED.dudas, "
+                    "n_sesiones = memoria_usuario.n_sesiones + 1, "
+                    "ultima_session_id = EXCLUDED.ultima_session_id, "
+                    "updated_at = now()"
+                ),
+                {
+                    "user_id": user_id,
+                    "subject_id": subject_id,
+                    "resumen": resumen,
+                    "temas": json.dumps(temas),
+                    "dudas": json.dumps(dudas),
+                    "session_id": session_id,
+                },
+            )
+        logger.info(
+            f"resumir_sesion: memoria actualizada user={user_id} subject={subject_id} "
+            f"(sesión {session_id})"
+        )
+    except Exception:
+        logger.exception(f"resumir_sesion falló (sesión {session_id}); se ignora (best-effort)")

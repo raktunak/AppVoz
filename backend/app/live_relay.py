@@ -23,13 +23,19 @@ from google import genai
 from google.genai import types
 from loguru import logger
 
+from . import persistence
 from .config import settings
 from .persona import SALON_PERSONA
 
 router = APIRouter()
 
-# Auth Vertex por ADC: la SA appvoz-voice (la misma que usa Chirp 3 HD).
-os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", settings.google_application_credentials)
+# Auth Vertex por ADC. En LOCAL usamos la SA appvoz-voice (fichero JSON); en Cloud Run
+# ese fichero NO existe, asi que solo apuntamos a el si esta presente. Si no, el ADC usa
+# la service account del runtime (metadata server) — fijar una ruta inexistente rompe la
+# autenticacion en prod.
+_sa = settings.google_application_credentials
+if _sa and os.path.exists(_sa) and "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _sa
 _client = genai.Client(
     vertexai=True,
     project=settings.gcp_project_id,
@@ -262,9 +268,54 @@ async def _browser_to_gemini(ws: WebSocket, session):
         logger.exception("browser->gemini ERROR")
 
 
-async def _gemini_to_browser(ws: WebSocket, session):
+class _AcumuladorTurnos:
+    """Agrupa los fragmentos de transcripción que llegan en streaming en TURNOS para
+    persistirlos al cerrar la llamada.
+
+    Las transcripciones llegan troceadas y alternando rol (usuario vs tutor). Aquí
+    concatenamos fragmentos consecutivos del MISMO rol y, cuando llega texto de
+    usuario después de texto del tutor, damos por cerrado el turno anterior y
+    abrimos uno nuevo. La vía Live no tiene RAG ni métricas, así que los turnos
+    guardan solo user_text/bot_text (las columnas RAG/latencia quedan en NULL/[])."""
+
+    def __init__(self):
+        self.turnos: list[dict] = []
+        self._user = ""   # texto de usuario acumulado del turno en curso
+        self._bot = ""    # texto del tutor acumulado del turno en curso
+
+    def _flush(self):
+        """Cierra el turno en curso (si tiene contenido) y lo añade a la lista."""
+        if self._user or self._bot:
+            self.turnos.append({
+                "idx": len(self.turnos),
+                "user_text": self._user or None,
+                "bot_text": self._bot or None,
+                # La vía Live no tiene RAG/métricas: columnas en NULL/[].
+                "chunks": [],
+            })
+        self._user, self._bot = "", ""
+
+    def add_user(self, texto: str):
+        # Usuario tras respuesta del tutor → empieza un turno nuevo.
+        if self._bot:
+            self._flush()
+        self._user += texto
+
+    def add_bot(self, texto: str):
+        self._bot += texto
+
+    def finalizar(self) -> list[dict]:
+        """Cierra el último turno pendiente y devuelve todos los turnos."""
+        self._flush()
+        return self.turnos
+
+
+async def _gemini_to_browser(ws: WebSocket, session, acc: "_AcumuladorTurnos"):
     """Audio + transcripción + consumo de Gemini → navegador. receive() entrega un turno
-    y se cierra, por eso el while True lo reabre para el siguiente."""
+    y se cierra, por eso el while True lo reabre para el siguiente.
+
+    Además de reenviar las transcripciones al navegador, las acumula en `acc` para
+    persistir la conversación al cerrar la llamada."""
     try:
         while True:
             async for response in session.receive():
@@ -284,9 +335,11 @@ async def _gemini_to_browser(ws: WebSocket, session):
                             await ws.send_bytes(inline.data)
                 it = getattr(sc, "input_transcription", None)
                 if it and getattr(it, "text", None):
+                    acc.add_user(it.text)
                     await ws.send_text(json.dumps({"type": "user", "text": it.text}))
                 ot = getattr(sc, "output_transcription", None)
                 if ot and getattr(ot, "text", None):
+                    acc.add_bot(ot.text)
                     await ws.send_text(json.dumps({"type": "bot", "text": ot.text}))
     except Exception:
         logger.exception("gemini->browser ERROR")
@@ -300,14 +353,19 @@ async def ws_call(ws: WebSocket):
     if cfg is None:
         logger.info("cliente se fue en el handshake")
         return
+    # Identidad para persistir la conversación. La vía Live aún no tiene materia:
+    # defaults user_id='anonimo', subject_id='demo'.
+    user_id = (cfg.get("user_id") or "anonimo").strip() or "anonimo"
+    subject_id = (cfg.get("subject_id") or "demo").strip() or "demo"
     model, live_config = _build_config(cfg)
     logger.info(f"abriendo Gemini Live (Vertex) model={model} voice={cfg.get('voice', DEFAULT_VOICE)}")
+    acc = _AcumuladorTurnos()
     try:
         async with _client.aio.live.connect(model=model, config=live_config) as session:
             logger.info("Gemini Live CONECTADO; ready (hablas tú primero)")
             await ws.send_text(json.dumps({"type": "ready", "model": model}))
             up = asyncio.create_task(_browser_to_gemini(ws, session))
-            down = asyncio.create_task(_gemini_to_browser(ws, session))
+            down = asyncio.create_task(_gemini_to_browser(ws, session, acc))
             _, pending = await asyncio.wait({up, down}, return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
                 t.cancel()
@@ -321,6 +379,20 @@ async def ws_call(ws: WebSocket):
         except Exception:
             pass
     finally:
+        # Persistir la conversación (best-effort: nunca debe romper el cierre del WS).
+        try:
+            turnos = acc.finalizar()
+            if turnos:
+                session_id = await persistence.crear_sesion(
+                    subject_id, user_id, via="gemini_live"
+                )
+                n = await persistence.guardar_turnos(session_id, turnos)
+                await persistence.cerrar_sesion(session_id, n)
+                # Resumen → memoria: fire-and-forget (no bloquea el cierre).
+                asyncio.create_task(persistence.resumir_sesion(session_id))
+                logger.info(f"sesión {session_id} persistida ({n} turnos)")
+        except Exception:
+            logger.exception("no pude persistir la sesión Live; se ignora")
         try:
             await ws.close()
         except Exception:

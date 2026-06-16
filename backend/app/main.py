@@ -7,6 +7,7 @@ from .chunking import chunk_text
 from .db import engine
 from .embeddings import embed_texts, to_pgvector
 from .live_relay import router as live_router
+from .persistence import crear_tablas
 from .rag import retrieve
 from .voice import router as voice_router
 
@@ -17,20 +18,8 @@ app.include_router(live_router)  # /ws/call (Gemini Live directo)
 
 @app.on_event("startup")
 async def _startup():
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "CREATE TABLE IF NOT EXISTS conversaciones ("
-                "id BIGSERIAL PRIMARY KEY, etiqueta TEXT, started_at TIMESTAMPTZ DEFAULT now())"
-            )
-        )
-        await conn.execute(
-            text(
-                "CREATE TABLE IF NOT EXISTS mensajes ("
-                "id BIGSERIAL PRIMARY KEY, conversacion_id BIGINT, role TEXT, "
-                "texto TEXT, ts TIMESTAMPTZ DEFAULT now())"
-            )
-        )
+    # Tablas de la Fase 1 (sesiones, turnos, memoria_usuario); idempotente.
+    await crear_tablas()
 
 
 # ---------- Salud ----------
