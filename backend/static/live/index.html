@@ -3,20 +3,43 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AppVoz · Llamada (Gemini Live directo)</title>
+<title>AppVoz · Banco de pruebas de voz (Gemini Live / Vertex)</title>
 <style>
   :root { color-scheme: dark; }
   html, body { height: 100%; margin: 0; }
-  body { font-family: system-ui, sans-serif; max-width: 560px; margin: 0 auto; padding: 16px;
-         background:#0f1115; color:#e7e9ee; display:flex; flex-direction:column; height:100vh;
-         box-sizing:border-box; }
-  h1 { font-size: 1.1rem; margin: 4px 0; }
-  .muted { color:#9aa3b2; font-size:.85rem; margin: 2px 0 10px; }
-  button { padding: 13px 20px; border-radius: 10px; border:1px solid #2a2f3a; font-size:1.05rem;
-           cursor:pointer; color:#e7e9ee; background:#1b2b22; border-color:#2e6b4a; }
-  button.on { background:#3a1b1b; border-color:#a33; }
+  body { font-family: system-ui, sans-serif; background:#0f1115; color:#e7e9ee;
+         display:flex; height:100vh; box-sizing:border-box; }
+  h1 { font-size: 1.05rem; margin: 0 0 4px; }
+  h2 { font-size: .78rem; text-transform:uppercase; letter-spacing:.04em; color:#9aa3b2;
+       margin: 14px 0 6px; }
+  .muted { color:#9aa3b2; font-size:.82rem; }
+
+  #panel { width: 360px; min-width:320px; background:#10131a; border-right:1px solid #232834;
+           padding:16px; overflow-y:auto; box-sizing:border-box; display:flex; flex-direction:column; }
+  #panel label { display:block; font-size:.78rem; color:#c5ccd8; margin:8px 0 3px; }
+  #panel select, #panel textarea, #panel input[type=number] {
+     width:100%; box-sizing:border-box; background:#161a22; color:#e7e9ee;
+     border:1px solid #2a2f3a; border-radius:8px; padding:8px; font-size:.9rem; font-family:inherit; }
+  #panel textarea { min-height:150px; resize:vertical; line-height:1.4; }
+  #panel.locked select, #panel.locked textarea, #panel.locked input { opacity:.5; pointer-events:none; }
+  .lock-note { color:#caa14a; font-size:.75rem; margin-top:4px; min-height:1em; }
+  .hint { color:#7f8a9b; font-size:.72rem; margin-top:2px; }
+  .check { display:flex; align-items:center; gap:8px; margin:6px 0; font-size:.85rem; color:#d6dbe5; }
+  .check input { width:auto; }
+  .twocol { display:flex; gap:10px; }
+  .twocol > div { flex:1; }
+  .hidden { display:none !important; }
+
+  .usage { background:#0c0f15; border:1px solid #232834; border-radius:8px; padding:10px; font-size:.82rem; }
+  .usage .row { display:flex; justify-content:space-between; padding:2px 0; }
+  .usage .row b { color:#7fd1a3; font-variant-numeric: tabular-nums; }
+  .usage .sub { color:#9aa3b2; font-size:.74rem; }
+
+  #main { flex:1; min-width:0; padding:16px 20px; display:flex; flex-direction:column; box-sizing:border-box; }
+  button#call { padding:13px 20px; border-radius:10px; border:1px solid #2e6b4a; font-size:1.05rem;
+           cursor:pointer; color:#e7e9ee; background:#1b2b22; }
+  button#call.on { background:#3a1b1b; border-color:#a33; }
   #status { margin:10px 0; color:#9aa3b2; min-height:1.1em; font-size:.9rem; }
-  /* Chat con scroll propio (estilo WhatsApp) */
   #chat { flex:1; min-height:0; overflow-y:auto; background:#10131a; border:1px solid #232834;
           border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px; }
   .msg { max-width:80%; padding:8px 12px; border-radius:14px; line-height:1.35; word-wrap:break-word; }
@@ -26,11 +49,59 @@
 </style>
 </head>
 <body>
-  <h1>🎙️ AppVoz · Llamada con Lucía</h1>
-  <div class="muted">Gemini Live directo. Habla normal, en español.</div>
-  <div><button id="call">☎ Iniciar llamada</button></div>
-  <div id="status">Listo.</div>
-  <div id="chat"></div>
+  <aside id="panel">
+    <h1>⚙️ Ajustes de Live</h1>
+    <div class="muted">Vertex AI · se aplican al iniciar la llamada.</div>
+
+    <h2>Modelo</h2>
+    <select id="model"></select>
+    <div class="hint" id="modelHint"></div>
+
+    <h2>Voz</h2>
+    <select id="voice"></select>
+
+    <div id="langBox">
+      <h2>Idioma</h2>
+      <select id="language"></select>
+      <div class="hint" id="langHint"></div>
+    </div>
+
+    <div id="featBox">
+      <h2>Inmersión (native-audio)</h2>
+      <label class="check"><input type="checkbox" id="affective"> Affective dialog (interpreta tono/emoción)</label>
+      <label class="check"><input type="checkbox" id="proactive"> Proactividad (decide cuándo hablar/callar)</label>
+      <div class="hint">Experimental: si la sesión falla al activarlas, desmárcalas.</div>
+    </div>
+
+    <h2>Generación</h2>
+    <div class="twocol">
+      <div><label for="temp">Temperatura</label><input id="temp" type="number" step="0.1" min="0" max="2" placeholder="auto"></div>
+      <div><label for="maxtok">Máx. tokens salida</label><input id="maxtok" type="number" step="1" min="1" placeholder="auto"></div>
+    </div>
+
+    <h2>Prompt (system instruction)</h2>
+    <textarea id="prompt" spellcheck="false"></textarea>
+    <div class="lock-note" id="lockNote"></div>
+
+    <h2>Consumo (tokens reales)</h2>
+    <div class="usage">
+      <div class="row"><span>Último turno · total</span><b id="uTotal">—</b></div>
+      <div class="row sub"><span>entrada / salida</span><span><b id="uPrompt">—</b> / <b id="uResp">—</b></span></div>
+      <div class="row sub"><span>audio (in/out)</span><span id="uAudio">—</span></div>
+      <div class="row" style="margin-top:6px"><span>Acumulado sesión (Σ turnos)</span><b id="uAcc">0</b></div>
+      <div class="row sub"><span>turnos</span><b id="uTurns">0</b></div>
+      <div class="row" style="margin-top:6px"><span>Coste sesión (≈ €)</span><b id="uCost">—</b></div>
+      <div class="hint" id="priceHint"></div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <h1>🎙️ AppVoz · Llamada</h1>
+    <div class="muted">Habla normal, en español. Pausa ~1s al terminar el turno.</div>
+    <div style="margin-top:10px"><button id="call">☎ Iniciar llamada</button></div>
+    <div id="status">Cargando ajustes…</div>
+    <div id="chat"></div>
+  </main>
   <script src="app.js"></script>
 </body>
 </html>

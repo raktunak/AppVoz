@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     gcp_region: str = "europe-west1"
     google_api_key: str = ""
 
+    # Vertex AI — Live API (relay de voz). Auth por SA appvoz-voice vía ADC.
+    # Live NO está en el endpoint 'global'; us-central1 es la región fiable.
+    google_application_credentials: str = "credentials/appvoz-voice.json"
+    gcp_live_location: str = "us-central1"
+
     # Embeddings
     embedding_model: str = "gemini-embedding-001"
     embedding_dim: int = 768
