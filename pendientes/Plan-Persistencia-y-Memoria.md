@@ -195,3 +195,23 @@ filtra siempre por `user_id`; nunca hay retrieval sin filtro.
   embeddings de queries repetidas, estado de sesión entre instancias o rate-limiting. No ahora.
 - **Alembic:** se introduce cuando la Fase 2 toque `chunks` con `ALTER`+backfill (D6 = C).
 - **Auth real:** D3 = A por ahora (id blando, no personalizar). Revisar antes de Fase 2.
+
+---
+
+## 7. Ideas / candidatos de corpus RAG (futuro)
+
+Más allá del material del curso (corpus actual) y la memoria del alumno (Fase 2A), otras cosas
+que **tendría sentido vectorizar**, siempre **aisladas por `subject_id`** (o `user_id` la del alumno):
+
+- **Glosario de conceptos** del temario (definiciones canónicas) → refuerza el modelo de mastery
+  y da respuestas consistentes. Liga con la tabla `conceptos` de la Fase 2B.
+- **Errores / malentendidos frecuentes** por materia → el tutor los anticipa y corrige al detectarlos.
+- **Banco de Q&A / "preguntas doradas" y ejercicios** → reutilizar respuestas buenas, generar
+  quizzes y medir la calidad del retrieval (las "preguntas doradas" ya están en la Lista 2 del MVP).
+- **Material multimodal convertido a texto**: transcripciones de vídeo/audio del curso y OCR de
+  diagramas/PDF → amplía el corpus sin tocar el pipeline (embeddings/chunking congelados).
+- **Memoria del alumno** (hechos/preferencias destilados) → Fase 2A, filtrada por `user_id`.
+
+**NO meter en RAG** (va a tablas relacionales, no a pgvector): transcripciones en crudo, métricas
+de latencia/consumo, config/persona y logs de error.
+
