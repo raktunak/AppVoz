@@ -69,6 +69,8 @@ async function loadDefaults() {
     $("prompt").value = d.persona || "";
     renderModel(d.default_model);
     $("model").addEventListener("change", (e) => renderModel(e.target.value));
+    $("prompt").addEventListener("input", schedulePromptCount);
+    countPromptTokens();
     setStatus(`Listo · región ${d.location}. Edita el prompt y pulsa Iniciar.`);
   } catch (e) {
     setStatus("No pude cargar ajustes: " + e);
@@ -77,6 +79,32 @@ async function loadDefaults() {
 function lockPanel(locked) {
   $("panel").classList.toggle("locked", locked);
   $("lockNote").textContent = locked ? "🔒 En llamada: cuelga para cambiar ajustes." : "";
+}
+
+// ---- tamaño del prompt (tokens reales vía count_tokens; estimación local si la API falla) ----
+let promptCountTimer = null;
+function estTokens(t) { return Math.max(1, Math.round(t.trim().length / 4)); }
+function schedulePromptCount() {
+  clearTimeout(promptCountTimer);
+  promptCountTimer = setTimeout(countPromptTokens, 600);
+}
+async function countPromptTokens() {
+  const text = $("prompt").value;
+  const el = $("promptTokens");
+  if (!text.trim()) { el.textContent = "Tamaño del prompt: 0 tokens"; return; }
+  el.textContent = "Tamaño del prompt: … tokens";
+  try {
+    const r = await fetch("/api/live/count_tokens", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, model: $("model").value }),
+    });
+    const j = await r.json();
+    el.textContent = (j.tokens != null)
+      ? `Tamaño del prompt: ${fmt(j.tokens)} tokens`
+      : `Tamaño del prompt: ~${fmt(estTokens(text))} tokens (estimado)`;
+  } catch (e) {
+    el.textContent = `Tamaño del prompt: ~${fmt(estTokens(text))} tokens (estimado)`;
+  }
 }
 
 // ---- consumo ----

@@ -85,6 +85,11 @@ MODELS = list(MODELS_CAPS.keys())
 DEFAULT_MODEL = MODELS[0]
 DEFAULT_VOICE = MODELS_CAPS[DEFAULT_MODEL]["default_voice"]
 
+# Modelo estable para CONTAR el tamano del prompt: los IDs Live no valen para
+# count_tokens, pero el tokenizador de la familia 2.5 es el mismo, asi que el
+# numero de tokens del texto es equivalente.
+COUNT_MODEL = "gemini-2.5-flash"
+
 SPEECH_PEAK = 1000   # pico de amplitud >= esto = voz (silencio ~200-350, voz ~8000-15000)
 END_SILENCE = 12     # ~1s de silencio (frames de ~80ms) para cerrar el turno
 
@@ -100,6 +105,21 @@ async def live_defaults():
         "location": settings.gcp_live_location,
         "usd_eur": USD_EUR,
     }
+
+
+@router.post("/api/live/count_tokens")
+async def count_tokens(payload: dict):
+    """Cuenta los tokens reales del system instruction (tamano del prompt mientras se
+    edita). count_tokens NO se factura como generacion; solo informa cuanto ocupa."""
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return {"tokens": 0}
+    try:
+        res = await _client.aio.models.count_tokens(model=COUNT_MODEL, contents=text)
+        return {"tokens": getattr(res, "total_tokens", None)}
+    except Exception as e:
+        logger.exception("count_tokens fallo")
+        return {"tokens": None, "error": str(e)}
 
 
 def _build_config(cfg: dict) -> tuple[str, types.LiveConnectConfig]:
