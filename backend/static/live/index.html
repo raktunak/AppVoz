@@ -30,6 +30,14 @@
   .twocol > div { flex:1; }
   .hidden { display:none !important; }
 
+  .slider-row { display:flex; align-items:center; gap:8px; }
+  .slider-row input[type=range] { flex:1; min-width:0; accent-color:#3a8c5e; }
+  .slider-row .step { width:34px; padding:7px 0; background:#161a22; color:#e7e9ee; border:1px solid #2a2f3a;
+                      border-radius:8px; cursor:pointer; font-size:1.05rem; line-height:1; flex:none; }
+  .slider-row .step:hover { border-color:#2e6b4a; }
+  /* El control de micro sigue activo en llamada (ajuste de sensibilidad en vivo). */
+  #panel.locked .live, #panel.locked .live input, #panel.locked .live button { opacity:1 !important; pointer-events:auto !important; }
+
   .usage { background:#0c0f15; border:1px solid #232834; border-radius:8px; padding:10px; font-size:.82rem; }
   .usage .row { display:flex; justify-content:space-between; padding:2px 0; }
   .usage .row b { color:#7fd1a3; font-variant-numeric: tabular-nums; }
@@ -88,6 +96,33 @@
       <label class="check"><input type="checkbox" id="proactive"> Proactividad (decide cuándo hablar/callar)</label>
       <div class="hint">Experimental: si la sesión falla al activarlas, desmárcalas.</div>
     </div>
+
+    <h2>Micrófono</h2>
+    <div class="muted" style="font-size:.78rem; margin-bottom:4px">Las tres se ajustan en vivo, incluso en plena llamada.</div>
+
+    <label for="micSens">Sensibilidad · <b id="micLevel">Alta</b> · <span id="micSensVal">umbral 1300</span></label>
+    <div class="slider-row live">
+      <button type="button" id="micMinus" class="step" title="Menos sensible (ignora más ruido)">−</button>
+      <input type="range" id="micSens" min="0" max="100" step="2" value="71">
+      <button type="button" id="micPlus" class="step" title="Más sensible (capta voz más baja)">＋</button>
+    </div>
+    <div class="hint"><b>Qué hace:</b> umbral de energía para que tu voz <i>abra</i> turno; por debajo se descarta como ruido. <b>Cuándo:</b> súbela (der.) en sitio silencioso o si te come palabras; bájala (izq.) si el ruido de fondo abre turnos solo.</div>
+
+    <label for="silSlider" style="margin-top:12px">Pausa fin de turno · <span id="silVal">1.0&nbsp;s</span></label>
+    <div class="slider-row live">
+      <button type="button" id="silMinus" class="step" title="Responde antes (te corta si pausas)">−</button>
+      <input type="range" id="silSlider" min="3" max="30" step="1" value="12">
+      <button type="button" id="silPlus" class="step" title="Más paciente con tus pausas">＋</button>
+    </div>
+    <div class="hint"><b>Qué hace:</b> silencio continuo que espera antes de dar tu turno por <i>terminado</i> y responder. <b>Cuándo:</b> bájala (izq.) para respuestas más ágiles; súbela (der.) si te corta al hacer pausas pensando.</div>
+
+    <label for="bargeSlider" style="margin-top:12px">Resistencia a cortes · <span id="bargeVal">0.5&nbsp;s</span></label>
+    <div class="slider-row live">
+      <button type="button" id="bargeMinus" class="step" title="Más fácil interrumpir al bot">−</button>
+      <input type="range" id="bargeSlider" min="2" max="12" step="1" value="6">
+      <button type="button" id="bargePlus" class="step" title="Ignora más ruido al interrumpir">＋</button>
+    </div>
+    <div class="hint"><b>Qué hace:</b> voz sostenida necesaria para <i>cortar</i> al bot mientras habla; un pico corto (tos/ruido) no llega y no le interrumpe. <b>Cuándo:</b> súbela (der.) si toses/ruidos le cortan a media frase; bájala (izq.) para poder interrumpirle al instante.</div>
 
     <h2>Generación</h2>
     <div class="twocol">

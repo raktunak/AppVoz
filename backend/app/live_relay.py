@@ -15,6 +15,7 @@ real de tokens (usage_metadata) que devuelve la API, para medir cuánto gasta ca
 """
 import array
 import asyncio
+import collections
 import json
 import os
 
@@ -111,8 +112,62 @@ DEFAULT_VOICE = MODELS_CAPS[DEFAULT_MODEL]["default_voice"]
 # numero de tokens del texto es equivalente.
 COUNT_MODEL = "gemini-2.5-flash"
 
-SPEECH_PEAK = 1000   # pico de amplitud >= esto = voz (silencio ~200-350, voz ~8000-15000)
-END_SILENCE = 12     # ~1s de silencio (frames de ~80ms) para cerrar el turno
+# VAD por energía con histéresis + anti-pico (compensa el micro sensible al ruido):
+# - abrir un turno es DIFÍCIL (umbral alto + varios frames seguidos) → el ruido de fondo
+#   no dispara falsos turnos;
+# - mantenerlo es FÁCIL (umbral más bajo) → no se corta en pasajes suaves a media frase.
+OPEN_PEAK = 1300         # abrir turno por defecto: pico >= esto (silencio ~200-350, voz ~8000-15000)
+OPEN_MIN, OPEN_MAX = 600, 3000   # límites del slider de sensibilidad del panel (umbral en vivo)
+START_FRAMES = 2         # frames seguidos >= umbral para abrir (~170ms, anti-pico)
+END_SILENCE = 12         # ~1s de silencio (frames de ~85ms) para cerrar el turno (default)
+SILENCE_MIN, SILENCE_MAX = 3, 30   # límites del slider de "pausa fin de turno" (frames ~85ms)
+BARGE_FRAMES = 6         # mientras el bot habla: ~0.5s de voz sostenida para cortarle (anti-tos)
+BARGE_MIN, BARGE_MAX = 2, 12   # límites del slider de "resistencia a cortes" (frames ~85ms)
+
+
+def _clamp_open(v) -> int:
+    """Umbral de apertura saneado a [OPEN_MIN, OPEN_MAX]; OPEN_PEAK si no es válido."""
+    try:
+        return max(OPEN_MIN, min(OPEN_MAX, int(v)))
+    except (TypeError, ValueError):
+        return OPEN_PEAK
+
+
+def _clamp_silence(v) -> int:
+    """Pausa de fin de turno saneada a [SILENCE_MIN, SILENCE_MAX]; END_SILENCE si no vale."""
+    try:
+        return max(SILENCE_MIN, min(SILENCE_MAX, int(v)))
+    except (TypeError, ValueError):
+        return END_SILENCE
+
+
+def _clamp_barge(v) -> int:
+    """Resistencia a cortes saneada a [BARGE_MIN, BARGE_MAX]; BARGE_FRAMES si no vale."""
+    try:
+        return max(BARGE_MIN, min(BARGE_MAX, int(v)))
+    except (TypeError, ValueError):
+        return BARGE_FRAMES
+
+
+def _vad_from_open(open_peak: int, end_silence: int = END_SILENCE,
+                   barge_frames: int = BARGE_FRAMES) -> dict:
+    """Construye el dict de VAD a partir del umbral de apertura (el resto se deriva)."""
+    return {
+        "open_peak": open_peak,
+        "keep_peak": max(int(open_peak * 0.5), 600),  # histéresis: mantener cuesta la mitad que abrir
+        "start_frames": START_FRAMES,
+        "end_silence": end_silence,
+        "barge_frames": barge_frames,
+    }
+
+
+def _vad_params(cfg: dict) -> dict:
+    """VAD inicial de la sesión según el panel (sensibilidad + pausa + resistencia a cortes)."""
+    return _vad_from_open(
+        _clamp_open(cfg.get("mic_threshold")),
+        _clamp_silence(cfg.get("end_silence")),
+        _clamp_barge(cfg.get("barge_frames")),
+    )
 
 
 @router.get("/api/live/defaults")
@@ -259,9 +314,21 @@ def _usage_dict(um) -> dict:
     }
 
 
-async def _browser_to_gemini(ws: WebSocket, session):
-    """Audio del navegador → Gemini, con VAD por energía que señaliza el turno."""
-    in_speech, sil = False, 0
+async def _browser_to_gemini(ws: WebSocket, session, vad: dict, shared: dict):
+    """Audio del navegador → Gemini, con VAD por energía (histéresis + anti-pico + gate)
+    que señaliza el turno. Mientras NO hay turno no reenviamos audio a Gemini (el ruido de
+    fondo nunca llega); al abrir, volcamos un pequeño preludio para no clipar el inicio.
+
+    Anti-corte por ruido: para ABRIR turno en silencio basta `start_frames`; pero para
+    CORTAR al bot mientras habla (barge-in) se exige `barge_frames` de voz sostenida, así
+    una tos o un ruido corto no le interrumpe. El contador `hot` es "con fugas" (sube con
+    voz, baja con silencio) para distinguir un pico puntual de habla continua."""
+    open_peak, keep_peak = vad["open_peak"], vad["keep_peak"]
+    start_frames, end_silence = vad["start_frames"], vad["end_silence"]
+    barge_frames = vad["barge_frames"]
+    in_speech, sil, hot = False, 0, 0
+    prefix = collections.deque(maxlen=BARGE_MAX)  # preludio (cubre hasta el barge-in más largo)
+    dbg_max, dbg_n = 0, 0   # TEMP: diagnóstico de por qué no abre la compuerta
     try:
         while True:
             msg = await ws.receive()
@@ -270,6 +337,24 @@ async def _browser_to_gemini(ws: WebSocket, session):
                     await session.send_realtime_input(activity_end=types.ActivityEnd())
                 logger.info("browser->gemini: navegador desconectó")
                 return
+            txt = msg.get("text")
+            if txt:                              # mensaje de control: ajuste de VAD en vivo
+                try:
+                    data = json.loads(txt)
+                    if data.get("type") == "vad":
+                        if data.get("threshold") is not None:
+                            nv = _vad_from_open(_clamp_open(data.get("threshold")))
+                            open_peak, keep_peak = nv["open_peak"], nv["keep_peak"]
+                        if data.get("end_silence") is not None:
+                            end_silence = _clamp_silence(data.get("end_silence"))
+                        if data.get("barge_frames") is not None:
+                            barge_frames = _clamp_barge(data.get("barge_frames"))
+                        logger.info(
+                            f"VAD en vivo: open_peak={open_peak} end_silence={end_silence} "
+                            f"barge={barge_frames}")
+                except Exception:
+                    pass
+                continue
             audio = msg.get("bytes")
             if not audio:
                 continue
@@ -279,21 +364,37 @@ async def _browser_to_gemini(ws: WebSocket, session):
             except Exception:
                 peak = 0
 
-            if peak >= SPEECH_PEAK:
-                if not in_speech:
+            if not in_speech:
+                prefix.append(audio)
+                # Cortar al bot exige más evidencia (voz sostenida) que abrir en silencio.
+                need = barge_frames if shared.get("bot_speaking") else start_frames
+                hot = min(need, hot + 1) if peak >= open_peak else max(0, hot - 1)
+                dbg_max = max(dbg_max, peak); dbg_n += 1   # TEMP
+                if dbg_n >= 25:                              # TEMP: ~2s
+                    logger.info(f"[VAD dbg] esperando voz: peak_max~{dbg_max} umbral={open_peak} "
+                                f"hot={hot} need={need} bot={shared.get('bot_speaking')}")
+                    dbg_max, dbg_n = 0, 0
+                if hot >= need:
+                    logger.info(f"[VAD dbg] turno ABIERTO peak={peak} need={need}")   # TEMP
                     await session.send_realtime_input(activity_start=types.ActivityStart())
-                    in_speech = True
-                sil = 0
-            elif in_speech:
-                sil += 1
-                if sil >= END_SILENCE:
-                    await session.send_realtime_input(activity_end=types.ActivityEnd())
-                    in_speech = False
-                    sil = 0
+                    in_speech, sil, hot = True, 0, 0
+                    for buf in list(prefix)[-need:]:           # vuelca el preludio: no se clipa
+                        await session.send_realtime_input(
+                            audio=types.Blob(data=buf, mime_type="audio/pcm;rate=16000"))
+                    prefix.clear()
+                continue                                      # sin turno: NO mandamos ruido a Gemini
 
+            # en turno: reenviamos el audio y vigilamos el silencio para cerrar
             await session.send_realtime_input(
                 audio=types.Blob(data=audio, mime_type="audio/pcm;rate=16000")
             )
+            if peak >= keep_peak:                             # histéresis: mantener es fácil
+                sil = 0
+            else:
+                sil += 1
+                if sil >= end_silence:
+                    await session.send_realtime_input(activity_end=types.ActivityEnd())
+                    in_speech, sil = False, 0
     except WebSocketDisconnect:
         logger.info("browser->gemini: WS cerrado")
     except Exception:
@@ -342,12 +443,13 @@ class _AcumuladorTurnos:
         return self.turnos
 
 
-async def _gemini_to_browser(ws: WebSocket, session, acc: "_AcumuladorTurnos"):
+async def _gemini_to_browser(ws: WebSocket, session, acc: "_AcumuladorTurnos", shared: dict):
     """Audio + transcripción + consumo de Gemini → navegador. receive() entrega un turno
     y se cierra, por eso el while True lo reabre para el siguiente.
 
     Además de reenviar las transcripciones al navegador, las acumula en `acc` para
-    persistir la conversación al cerrar la llamada."""
+    persistir la conversación al cerrar la llamada. Mantiene `shared['bot_speaking']`
+    (lo lee el VAD para exigir más voz antes de dejar que un ruido corte al bot)."""
     try:
         while True:
             async for response in session.receive():
@@ -359,11 +461,16 @@ async def _gemini_to_browser(ws: WebSocket, session, acc: "_AcumuladorTurnos"):
                 if not sc:
                     continue
                 if sc.interrupted:
+                    shared["bot_speaking"] = False
                     await ws.send_text(json.dumps({"type": "interrupted"}))
+                # Fin de generación/turno: el bot dejó de hablar (vuelve la apertura fácil).
+                if getattr(sc, "generation_complete", None) or getattr(sc, "turn_complete", None):
+                    shared["bot_speaking"] = False
                 if sc.model_turn:
                     for part in (sc.model_turn.parts or []):
                         inline = getattr(part, "inline_data", None)
                         if inline and inline.data:
+                            shared["bot_speaking"] = True   # el bot está emitiendo audio
                             await ws.send_bytes(inline.data)
                 it = getattr(sc, "input_transcription", None)
                 if it and getattr(it, "text", None):
@@ -390,14 +497,19 @@ async def ws_call(ws: WebSocket):
     user_id = (cfg.get("user_id") or "anonimo").strip() or "anonimo"
     subject_id = (cfg.get("subject_id") or "demo").strip() or "demo"
     model, live_config = _build_config(cfg)
-    logger.info(f"abriendo Gemini Live (Vertex) model={model} voice={cfg.get('voice', DEFAULT_VOICE)}")
+    vad = _vad_params(cfg)
+    logger.info(
+        f"abriendo Gemini Live (Vertex) model={model} voice={cfg.get('voice', DEFAULT_VOICE)} "
+        f"vad_open={vad['open_peak']}"
+    )
     acc = _AcumuladorTurnos()
     try:
         async with _client.aio.live.connect(model=model, config=live_config) as session:
             logger.info("Gemini Live CONECTADO; ready (hablas tú primero)")
             await ws.send_text(json.dumps({"type": "ready", "model": model}))
-            up = asyncio.create_task(_browser_to_gemini(ws, session))
-            down = asyncio.create_task(_gemini_to_browser(ws, session, acc))
+            shared = {"bot_speaking": False}   # estado compartido VAD ↔ salida (anti-corte)
+            up = asyncio.create_task(_browser_to_gemini(ws, session, vad, shared))
+            down = asyncio.create_task(_gemini_to_browser(ws, session, acc, shared))
             _, pending = await asyncio.wait({up, down}, return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
                 t.cancel()

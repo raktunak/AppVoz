@@ -317,6 +317,9 @@ async function start() {
       max_output_tokens: $("maxtok").value,
       affective_dialog: $("affective").checked,
       proactivity: $("proactive").checked,
+      mic_threshold: micThreshold(),
+      end_silence: silFrames(),
+      barge_frames: bargeFrames(),
       system_instruction: $("prompt").value,
     }));
     setStatus("Conectando con el modelo…");
@@ -379,5 +382,64 @@ $("call").addEventListener("click", async () => {
   $("call").textContent = "■ Colgar"; $("call").classList.add("on"); setStatus("Conectando…");
   try { await start(); } catch (e) { setStatus("Error: " + e); hangup(); }
 });
+
+// ---- ajustes de micro/VAD (sliders en vivo: ajustables en plena llamada) ----
+// Sensibilidad: 0 (ignora ruido) → 100 (capta voz baja). Se mapea al umbral de energía.
+function micThreshold() {
+  const s = Number($("micSens").value);
+  return Math.round(3000 - (s / 100) * (3000 - 600));  // 0 → 3000, 100 → 600
+}
+// Intensidad con nombre + color según la posición del slider.
+function micLevel(s) {
+  if (s < 20) return { name: "Muy baja", color: "#4a90d9" };
+  if (s < 40) return { name: "Baja",     color: "#3a8c5e" };
+  if (s < 60) return { name: "Media",    color: "#6fae3a" };
+  if (s < 80) return { name: "Alta",     color: "#caa14a" };
+  return                { name: "Muy alta", color: "#d9694a" };
+}
+function renderMicSens() {
+  const s = Number($("micSens").value);
+  const lv = micLevel(s);
+  $("micLevel").textContent = lv.name;
+  $("micLevel").style.color = lv.color;
+  $("micSens").style.accentColor = lv.color;     // la barra cambia de color con el nivel
+  $("micSensVal").textContent = "umbral " + micThreshold();
+}
+// Pausa de fin de turno y resistencia a cortes: sliders en frames (~85 ms); se muestran en segundos.
+const FRAME_MS = 85;
+function silFrames() { return Number($("silSlider").value); }
+function renderSil() { $("silVal").innerHTML = (silFrames() * FRAME_MS / 1000).toFixed(1) + "&nbsp;s"; }
+function bargeFrames() { return Number($("bargeSlider").value); }
+function renderBarge() { $("bargeVal").innerHTML = (bargeFrames() * FRAME_MS / 1000).toFixed(1) + "&nbsp;s"; }
+// En llamada, manda un snapshot de los tres parámetros para que el VAD se ajuste al instante.
+function sendVadLive() {
+  if (ws && ws.readyState === 1 && onCall) {
+    ws.send(JSON.stringify({
+      type: "vad", threshold: micThreshold(), end_silence: silFrames(), barge_frames: bargeFrames(),
+    }));
+  }
+}
+function nudgeMic(delta) {
+  $("micSens").value = Math.max(0, Math.min(100, Number($("micSens").value) + delta));
+  renderMicSens(); sendVadLive();
+}
+function nudgeSil(delta) {
+  $("silSlider").value = Math.max(3, Math.min(30, silFrames() + delta));
+  renderSil(); sendVadLive();
+}
+function nudgeBarge(delta) {
+  $("bargeSlider").value = Math.max(2, Math.min(12, bargeFrames() + delta));
+  renderBarge(); sendVadLive();
+}
+$("micSens").addEventListener("input", () => { renderMicSens(); sendVadLive(); });
+$("micMinus").addEventListener("click", () => nudgeMic(-2));
+$("micPlus").addEventListener("click", () => nudgeMic(+2));
+$("silSlider").addEventListener("input", () => { renderSil(); sendVadLive(); });
+$("silMinus").addEventListener("click", () => nudgeSil(-1));
+$("silPlus").addEventListener("click", () => nudgeSil(+1));
+$("bargeSlider").addEventListener("input", () => { renderBarge(); sendVadLive(); });
+$("bargeMinus").addEventListener("click", () => nudgeBarge(-1));
+$("bargePlus").addEventListener("click", () => nudgeBarge(+1));
+renderMicSens(); renderSil(); renderBarge();
 
 loadDefaults().then(loadHistory);
