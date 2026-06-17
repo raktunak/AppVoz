@@ -32,11 +32,10 @@ from . import persistence
 from .config import settings
 from .live_relay import (
     BARGE_MAX,
-    OPEN_PEAK,
     _AcumuladorTurnos,
     _build_config,
     _client,
-    _vad_from_open,
+    _vad_params,
 )
 
 router = APIRouter()
@@ -109,6 +108,30 @@ async def telnyx_voice(request: Request):
             "stream_bidirectional_target_legs": "self",
         })
     return {}
+
+
+# --- Config de las llamadas telefónicas: la fija el panel (/call), la lee el relay ---
+_CFG_KEYS = (
+    "model", "voice", "language", "temperature", "max_output_tokens",
+    "affective_dialog", "proactivity", "system_instruction",
+    "mic_threshold", "end_silence", "barge_frames",
+)
+
+
+@router.get("/api/telnyx/config")
+async def get_telnyx_config():
+    """Config activa de las llamadas telefónicas (la última guardada desde el panel)."""
+    return {"cfg": await persistence.obtener_config_telefono() or {}}
+
+
+@router.post("/api/telnyx/config")
+async def set_telnyx_config(payload: dict):
+    """Guarda la selección actual del panel (voz/persona/modelo/VAD) para el teléfono."""
+    cfg = {k: payload.get(k) for k in _CFG_KEYS}
+    await persistence.guardar_config_telefono(cfg)
+    logger.info(f"[telnyx] config de teléfono guardada: model={cfg.get('model')} "
+                f"voice={cfg.get('voice')}")
+    return {"ok": True, "cfg": cfg}
 
 
 async def _send_audio(ws: WebSocket, pcm16: bytes, stream_id: str | None):
@@ -246,8 +269,17 @@ async def ws_telnyx(ws: WebSocket):
     primero (di 'hola'); el bot responde anclado a SALON_PERSONA."""
     await ws.accept()
     logger.info("[telnyx] WS conectado (Gemini Live)")
-    model, live_config = _build_config({})        # defaults: SALON_PERSONA + native-audio
-    vad = _vad_from_open(OPEN_PEAK)
+    # Config del panel (voz/persona/modelo/VAD); si nunca se guardó → defaults
+    # (SALON_PERSONA + native-audio). Lee de la tabla config_telefono.
+    cfg = {}
+    try:
+        cfg = await persistence.obtener_config_telefono() or {}
+    except Exception:
+        logger.exception("[telnyx] no pude cargar config de teléfono; uso defaults")
+    model, live_config = _build_config(cfg)
+    vad = _vad_params(cfg)
+    logger.info(f"[telnyx] sesión model={model} voice={cfg.get('voice', 'default')} "
+                f"vad_open={vad['open_peak']}")
     acc = _AcumuladorTurnos()
     shared = {"stream_id": None, "bot_speaking": False, "from": None}
     try:

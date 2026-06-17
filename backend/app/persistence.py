@@ -83,6 +83,16 @@ _DDL = [
         UNIQUE (user_id, subject_id)
     )
     """,
+    # Config activa para las llamadas TELEFÓNICAS (Telnyx): una sola fila (id=1) con
+    # el cfg que arma el panel (voz, modelo, persona, idioma, VAD…). El relay de Telnyx
+    # la lee al arrancar para que el teléfono use lo seleccionado en el panel.
+    """
+    CREATE TABLE IF NOT EXISTS config_telefono (
+        id           SMALLINT PRIMARY KEY DEFAULT 1,
+        cfg          JSONB NOT NULL,
+        actualizado  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
     # Índices: lecturas típicas (memoria por usuario+materia, sesiones por
     # materia, turnos de una sesión en orden temporal).
     "CREATE INDEX IF NOT EXISTS idx_sesiones_user_subject ON sesiones (user_id, subject_id)",
@@ -178,6 +188,34 @@ async def cerrar_sesion(session_id: int, n_turnos: int) -> None:
             ),
             {"n": n_turnos, "id": session_id},
         )
+
+
+# --------------------------------------------------------------------------- #
+# Config de llamadas telefónicas (Telnyx) — la fija el panel, la lee el relay.
+# --------------------------------------------------------------------------- #
+async def guardar_config_telefono(cfg: dict) -> None:
+    """Guarda (UPSERT, fila única id=1) el cfg que usarán las llamadas de teléfono."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO config_telefono (id, cfg, actualizado) "
+                "VALUES (1, CAST(:cfg AS jsonb), now()) "
+                "ON CONFLICT (id) DO UPDATE SET cfg = EXCLUDED.cfg, actualizado = now()"
+            ),
+            {"cfg": json.dumps(cfg)},
+        )
+
+
+async def obtener_config_telefono() -> dict | None:
+    """Devuelve el cfg activo de teléfono, o None si nunca se guardó."""
+    async with engine.connect() as conn:
+        val = (
+            await conn.execute(text("SELECT cfg FROM config_telefono WHERE id = 1"))
+        ).scalar()
+    if val is None:
+        return None
+    # asyncpg puede devolver jsonb como str o ya decodificado; normalizamos a dict.
+    return json.loads(val) if isinstance(val, str) else val
 
 
 # --------------------------------------------------------------------------- #

@@ -47,6 +47,9 @@
   button#call { padding:13px 20px; border-radius:10px; border:1px solid #2e6b4a; font-size:1.05rem;
            cursor:pointer; color:#e7e9ee; background:#1b2b22; }
   button#call.on { background:#3a1b1b; border-color:#a33; }
+  button#savePhone { padding:13px 16px; border-radius:10px; border:1px solid #2a3a55; font-size:.95rem;
+           cursor:pointer; color:#e7e9ee; background:#172234; margin-left:8px; }
+  button#savePhone:hover { border-color:#3a5a8c; }
   #status { margin:10px 0; color:#9aa3b2; min-height:1.1em; font-size:.9rem; }
   #chat { flex:1; min-height:0; overflow-y:auto; background:#10131a; border:1px solid #232834;
           border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px; }
@@ -153,7 +156,11 @@
   <main id="main">
     <h1>🎙️ AppVoz · Llamada</h1>
     <div class="muted">Habla normal; el modelo detecta el idioma. Pausa ~1s al terminar el turno.</div>
-    <div style="margin-top:10px"><button id="call">☎ Iniciar llamada</button></div>
+    <div style="margin-top:10px">
+      <button id="call">☎ Iniciar llamada</button>
+      <button id="savePhone" title="Guarda la voz/persona/modelo/ajustes actuales para que los usen las llamadas de teléfono (Telnyx)">📞 Guardar para teléfono</button>
+    </div>
+    <div id="phoneStatus" class="muted" style="font-size:.8rem; min-height:1em; margin-top:6px"></div>
     <div id="status">Cargando ajustes…</div>
     <div id="chat"></div>
   </main>

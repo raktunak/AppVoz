@@ -293,6 +293,25 @@ function toPCM16(f32) {
   return dv.buffer;
 }
 
+// Config actual del panel — compartida por la llamada web (WS) y el guardado para teléfono.
+function panelConfig() {
+  return {
+    user_id: getUserId(),
+    subject_id: "demo",
+    model: $("model").value,
+    voice: $("voice").value,
+    language: $("language").value,
+    temperature: $("temp").value,
+    max_output_tokens: $("maxtok").value,
+    affective_dialog: $("affective").checked,
+    proactivity: $("proactive").checked,
+    mic_threshold: micThreshold(),
+    end_silence: silFrames(),
+    barge_frames: bargeFrames(),
+    system_instruction: $("prompt").value,
+  };
+}
+
 async function start() {
   ensurePlay();
   // NO se limpia el chat: la conversación se conserva entre llamadas (se va añadiendo).
@@ -305,23 +324,7 @@ async function start() {
 
   // Handshake: en cuanto abre, mandamos la config (prompt/voz/modelo) ANTES del audio.
   ws.onopen = () => {
-    ws.send(JSON.stringify({
-      type: "config",
-      user_id: getUserId(),
-      session_id: sessionId,
-      subject_id: "demo",
-      model: $("model").value,
-      voice: $("voice").value,
-      language: $("language").value,
-      temperature: $("temp").value,
-      max_output_tokens: $("maxtok").value,
-      affective_dialog: $("affective").checked,
-      proactivity: $("proactive").checked,
-      mic_threshold: micThreshold(),
-      end_silence: silFrames(),
-      barge_frames: bargeFrames(),
-      system_instruction: $("prompt").value,
-    }));
+    ws.send(JSON.stringify({ type: "config", session_id: sessionId, ...panelConfig() }));
     setStatus("Conectando con el modelo…");
   };
 
@@ -441,5 +444,23 @@ $("bargeSlider").addEventListener("input", () => { renderBarge(); sendVadLive();
 $("bargeMinus").addEventListener("click", () => nudgeBarge(-1));
 $("bargePlus").addEventListener("click", () => nudgeBarge(+1));
 renderMicSens(); renderSil(); renderBarge();
+
+// Guarda la config actual del panel para que la usen las llamadas de TELÉFONO (Telnyx).
+async function guardarConfigTelefono() {
+  const el = $("phoneStatus");
+  el.textContent = "Guardando…";
+  try {
+    const r = await fetch("/api/telnyx/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(panelConfig()),
+    });
+    const j = await r.json();
+    el.textContent = (r.ok && j.ok)
+      ? "✓ Guardado para teléfono · voz " + (j.cfg.voice || "—") + " · modelo " + (j.cfg.model || "—")
+      : "Error al guardar la config de teléfono.";
+  } catch (e) { el.textContent = "Error: " + e; }
+}
+$("savePhone").addEventListener("click", guardarConfigTelefono);
 
 loadDefaults().then(loadHistory);
