@@ -9,11 +9,13 @@ from .embeddings import embed_texts, to_pgvector
 from .live_relay import router as live_router
 from .persistence import crear_tablas
 from .rag import retrieve
+from .telnyx_relay import router as telnyx_router
 from .voice import router as voice_router
 
 app = FastAPI(title="AppVoz — Motor Tutor por Voz", version="0.5.0")
 app.include_router(voice_router)
 app.include_router(live_router)  # /ws/call (Gemini Live directo)
+app.include_router(telnyx_router)  # /telnyx/voice (webhook) + /ws/telnyx (media-stream)
 
 
 @app.on_event("startup")

@@ -21,5 +21,11 @@ class Settings(BaseSettings):
     embedding_model: str = "gemini-embedding-001"
     embedding_dim: int = 768
 
+    # Telnyx (telefonía PSTN/SIP → relay a Gemini Live)
+    telnyx_api_key: str = ""              # SECRETO (Bearer API v2)
+    telnyx_connection_id: str = ""        # Voice API application ID (no secreto)
+    telnyx_sip_subdomain: str = ""        # subdominio SIP de pruebas (no secreto)
+    telnyx_public_ws_url: str = ""        # override del WSS del media-stream (vacío = derivar del host)
+
 
 settings = Settings()
