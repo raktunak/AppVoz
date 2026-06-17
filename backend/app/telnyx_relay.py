@@ -1,38 +1,53 @@
-"""Relay de TELEFONÍA: Telnyx Media Streaming (PSTN/SIP) ⇄ backend.
+"""Relay de TELEFONÍA: Telnyx Media Streaming (PSTN/SIP) ⇄ Gemini Live.
 
   Llamante ──SIP──► Telnyx ──webhook──► POST /telnyx/voice   (contestamos + streaming_start)
-                    Telnyx ◄──WSS──► /ws/telnyx              (audio en ambos sentidos)
+                    Telnyx ◄──WSS──► /ws/telnyx ◄──► Gemini Live (Vertex)
 
-FASE A (esto, smoke-test SIN Gemini): el WS hace ECO — devuelve el audio que entra.
-Sirve para validar TODA la cadena (webhook → answer → streaming → WS → bidireccional)
-y, sobre todo, para VER en los logs el esquema real de mensajes y el `media_format`
-que manda Telnyx, antes de meter la complejidad de Gemini.
+Mismo patrón "backend en medio" que `live_relay.py`, pero el transporte es el protocolo
+de Media Streaming de Telnyx (JSON: connected | start | media | stop; audio en
+`media.payload` base64). Reutilizamos del relay del navegador el cliente Gemini,
+`_build_config`, el VAD por energía y `_AcumuladorTurnos`.
 
-FASE B (siguiente): sustituir el eco por una sesión Gemini Live (reutilizando
-`_build_config`/`_AcumuladorTurnos` de live_relay), con transcodificación L16 16k ⇄ 24k.
+FORMATO (confirmado en el smoke-test): Telnyx entrega **L16 / 16 kHz / mono** = la tasa de
+ENTRADA de Gemini → la entrada va passthrough (cero transcodificación). La SALIDA de Gemini
+es PCM 24 kHz → la bajamos a 16 kHz (`audioop.ratecv`) y la devolvemos como frames `media`.
+Para barge-in mandamos {"event":"clear"} (vacía el buffer de audio en curso en Telnyx).
 
-El protocolo WS de Telnyx Media Streaming va calcado al de Twilio: mensajes JSON con
-`event` = connected | start | media | stop; el audio viaja en `media.payload` (base64).
-Para DEVOLVER audio (bidireccional) mandamos {"event":"media","media":{"payload": b64}}
-y, para barge-in, {"event":"clear"}. Escribimos defensivo + log del primer `start`
-porque los nombres exactos de algunos campos hay que confirmarlos contra la cuenta real.
+FASE B (esto): persona fija `SALON_PERSONA`, sin RAG. La identidad del llamante (campo
+`from` del `start`) se usa como user_id para la persistencia (via="telnyx").
 """
+import array
+import asyncio
+import audioop
+import base64
+import collections
 import json
 
 import httpx
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from google.genai import types
 from loguru import logger
 
+from . import persistence
 from .config import settings
+from .live_relay import (
+    BARGE_MAX,
+    OPEN_PEAK,
+    _AcumuladorTurnos,
+    _build_config,
+    _client,
+    _vad_from_open,
+)
 
 router = APIRouter()
 
 TELNYX_API = "https://api.telnyx.com/v2"
 
-# Códec/tasa objetivo del stream: L16 16 kHz = la tasa de entrada de Gemini (mínima
-# transcodificación en Fase B). En la Fase A de eco solo reenviamos el payload tal cual.
+# Códec/tasa objetivo del stream: L16 16 kHz (= entrada de Gemini, mínima transcodificación).
 STREAM_CODEC = "L16"
 STREAM_RATE = 16000
+GEMINI_OUT_RATE = 24000          # Gemini Live emite PCM a 24 kHz
+OUT_CHUNK = 640                  # 20 ms de L16 16k mono (320 muestras * 2 bytes)
 
 
 async def _telnyx_cmd(ccid: str, action: str, body: dict | None = None) -> bool:
@@ -58,12 +73,11 @@ async def _telnyx_cmd(ccid: str, action: str, body: dict | None = None) -> bool:
 
 @router.post("/telnyx/voice")
 async def telnyx_voice(request: Request):
-    """Webhook de la Voice API application. Telnyx avisa de los eventos de llamada y
-    nosotros respondemos con comandos REST (answer + streaming_start).
+    """Webhook de la Voice API application: al entrar la llamada la contestamos y, al
+    quedar contestada, arrancamos el media-stream bidireccional hacia /ws/telnyx.
 
-    OJO (pendiente Fase 5): aquí debería verificarse la FIRMA Ed25519 del webhook
-    (cabeceras telnyx-signature-ed25519 / telnyx-timestamp). De momento se omite para
-    el smoke-test — cualquiera podría POSTear, pero a un ccid inválido el comando falla."""
+    OJO (pendiente Fase 5): falta verificar la FIRMA Ed25519 del webhook. De momento se
+    omite para las pruebas — a un ccid inválido el comando falla, pero conviene cerrarlo."""
     try:
         body = await request.json()
     except Exception:
@@ -80,76 +94,186 @@ async def telnyx_voice(request: Request):
     )
 
     if event == "call.initiated":
-        # Contestamos en cuanto entra; el streaming lo arrancamos al quedar contestada.
         await _telnyx_cmd(ccid, "answer")
     elif event == "call.answered":
-        # URL pública del WS = mismo host que recibió el webhook (Cloud Run o túnel).
         host = request.headers.get("host")
         ws_url = settings.telnyx_public_ws_url or f"wss://{host}/ws/telnyx"
         logger.info(f"[telnyx] streaming_start -> {ws_url} ({STREAM_CODEC}@{STREAM_RATE})")
         await _telnyx_cmd(ccid, "streaming_start", {
             "stream_url": ws_url,
-            "stream_track": "inbound_track",          # audio del llamante hacia nosotros
-            "stream_codec": STREAM_CODEC,             # entrada en L16 (si Telnyx puede transcodificar)
-            "stream_bidirectional_mode": "rtp",       # queremos devolver audio
+            "stream_track": "inbound_track",
+            "stream_codec": STREAM_CODEC,
+            "stream_bidirectional_mode": "rtp",
             "stream_bidirectional_codec": STREAM_CODEC,
             "stream_bidirectional_sampling_rate": STREAM_RATE,
-            "stream_bidirectional_target_legs": "self",  # el audio inyectado lo oye el llamante (1 solo leg)
+            "stream_bidirectional_target_legs": "self",
         })
-    # call.hangup, streaming.started/stopped, etc.: solo log; respondemos 200 siempre.
     return {}
 
 
-@router.websocket("/ws/telnyx")
-async def ws_telnyx(ws: WebSocket):
-    """WS del media-stream de Telnyx. FASE A: ECO — todo lo que entra se devuelve.
-    Loguea el primer `start` entero para conocer el `media_format` real."""
-    await ws.accept()
-    logger.info("[telnyx] WS conectado (eco)")
-    stream_id = None
-    n_media = 0
+async def _send_audio(ws: WebSocket, pcm16: bytes, stream_id: str | None):
+    """Trocea PCM L16 16k en frames de ~20 ms y los manda a Telnyx como eventos `media`."""
+    for i in range(0, len(pcm16), OUT_CHUNK):
+        out = {"event": "media",
+               "media": {"payload": base64.b64encode(pcm16[i:i + OUT_CHUNK]).decode()}}
+        if stream_id:
+            out["stream_id"] = stream_id
+        await ws.send_text(json.dumps(out))
+
+
+async def _telnyx_to_gemini(ws: WebSocket, session, vad: dict, shared: dict):
+    """Audio del llamante (Telnyx) → Gemini, con el mismo VAD por energía del relay web
+    (histéresis + anti-pico + anti-corte). La entrada ya es L16 16k → passthrough."""
+    open_peak, keep_peak = vad["open_peak"], vad["keep_peak"]
+    start_frames, end_silence = vad["start_frames"], vad["end_silence"]
+    barge_frames = vad["barge_frames"]
+    in_speech, sil, hot = False, 0, 0
+    prefix = collections.deque(maxlen=BARGE_MAX)
+    dbg_max, dbg_n = 0, 0
     try:
         while True:
             msg = await ws.receive()
             if msg.get("type") == "websocket.disconnect":
-                logger.info("[telnyx] WS disconnect")
+                if in_speech:
+                    await session.send_realtime_input(activity_end=types.ActivityEnd())
+                logger.info("[telnyx] WS disconnect (in)")
                 return
             raw = msg.get("text")
             if not raw:
-                # Telnyx manda JSON en texto; si llega binario, lo ignoramos (no esperado).
                 continue
             try:
                 data = json.loads(raw)
             except Exception:
-                logger.warning(f"[telnyx] frame no-JSON: {raw[:200]}")
+                continue
+            event = data.get("event")
+            if event == "start":
+                start = data.get("start") or {}
+                shared["stream_id"] = data.get("stream_id") or start.get("stream_id")
+                shared["from"] = start.get("from")
+                logger.info(f"[telnyx] START stream_id={shared['stream_id']} "
+                            f"from={shared.get('from')} fmt={start.get('media_format')}")
+                continue
+            if event == "stop":
+                if in_speech:
+                    await session.send_realtime_input(activity_end=types.ActivityEnd())
+                logger.info("[telnyx] STOP (in)")
+                return
+            if event != "media":
+                continue
+            payload = (data.get("media") or {}).get("payload")
+            if not payload:
+                continue
+            audio = base64.b64decode(payload)
+            try:
+                s = array.array("h"); s.frombytes(audio)
+                peak = max((abs(x) for x in s), default=0)
+            except Exception:
+                peak = 0
+
+            if not in_speech:
+                prefix.append(audio)
+                need = barge_frames if shared.get("bot_speaking") else start_frames
+                hot = min(need, hot + 1) if peak >= open_peak else max(0, hot - 1)
+                dbg_max = max(dbg_max, peak); dbg_n += 1
+                if dbg_n >= 100:                       # ~2 s: ayuda a tunear el VAD en banda telefónica
+                    logger.info(f"[telnyx VAD] esperando voz: peak_max~{dbg_max} "
+                                f"umbral={open_peak} hot={hot} need={need}")
+                    dbg_max, dbg_n = 0, 0
+                if hot >= need:
+                    logger.info(f"[telnyx VAD] turno ABIERTO peak={peak}")
+                    await session.send_realtime_input(activity_start=types.ActivityStart())
+                    in_speech, sil, hot = True, 0, 0
+                    for buf in list(prefix)[-need:]:
+                        await session.send_realtime_input(
+                            audio=types.Blob(data=buf, mime_type="audio/pcm;rate=16000"))
+                    prefix.clear()
                 continue
 
-            event = data.get("event")
-            if event == "media":
-                n_media += 1
-                payload = (data.get("media") or {}).get("payload")
-                if payload:
-                    out = {"event": "media", "media": {"payload": payload}}
-                    if stream_id:
-                        out["stream_id"] = stream_id
-                    await ws.send_text(json.dumps(out))
-                if n_media in (1, 50, 250):   # muestreo para no inundar el log
-                    logger.info(f"[telnyx] media #{n_media} (eco) len_b64={len(payload or '')}")
-            elif event == "start":
-                stream_id = data.get("stream_id") or (data.get("start") or {}).get("stream_id")
-                logger.info(f"[telnyx] START stream_id={stream_id} :: {json.dumps(data)[:900]}")
-            elif event == "connected":
-                logger.info(f"[telnyx] CONNECTED :: {raw[:300]}")
-            elif event == "stop":
-                logger.info(f"[telnyx] STOP (total media={n_media})")
-                return
+            await session.send_realtime_input(
+                audio=types.Blob(data=audio, mime_type="audio/pcm;rate=16000"))
+            if peak >= keep_peak:
+                sil = 0
             else:
-                logger.info(f"[telnyx] evento '{event}' :: {raw[:300]}")
+                sil += 1
+                if sil >= end_silence:
+                    await session.send_realtime_input(activity_end=types.ActivityEnd())
+                    in_speech, sil = False, 0
     except WebSocketDisconnect:
-        logger.info("[telnyx] WS cerrado")
+        logger.info("[telnyx] WS cerrado (in)")
     except Exception:
-        logger.exception("[telnyx] ERROR en /ws/telnyx")
+        logger.exception("[telnyx] ERROR telnyx->gemini")
+
+
+async def _gemini_to_telnyx(ws: WebSocket, session, acc: "_AcumuladorTurnos", shared: dict):
+    """Audio + transcripción de Gemini → Telnyx. La salida 24 kHz se baja a 16 kHz y se
+    trocea en frames `media`. En `interrupted` mandamos `clear` (barge-in: vacía el buffer)."""
+    rs_state = None
+    try:
+        while True:
+            async for response in session.receive():
+                sc = response.server_content
+                if not sc:
+                    continue
+                if sc.interrupted:
+                    shared["bot_speaking"] = False
+                    out = {"event": "clear"}
+                    if shared.get("stream_id"):
+                        out["stream_id"] = shared["stream_id"]
+                    await ws.send_text(json.dumps(out))
+                if getattr(sc, "generation_complete", None) or getattr(sc, "turn_complete", None):
+                    shared["bot_speaking"] = False
+                if sc.model_turn:
+                    for part in (sc.model_turn.parts or []):
+                        inline = getattr(part, "inline_data", None)
+                        if inline and inline.data:
+                            shared["bot_speaking"] = True
+                            pcm16, rs_state = audioop.ratecv(
+                                inline.data, 2, 1, GEMINI_OUT_RATE, STREAM_RATE, rs_state)
+                            await _send_audio(ws, pcm16, shared.get("stream_id"))
+                it = getattr(sc, "input_transcription", None)
+                if it and getattr(it, "text", None):
+                    acc.add_user(it.text)
+                ot = getattr(sc, "output_transcription", None)
+                if ot and getattr(ot, "text", None):
+                    acc.add_bot(ot.text)
+    except Exception:
+        logger.exception("[telnyx] ERROR gemini->telnyx")
+
+
+@router.websocket("/ws/telnyx")
+async def ws_telnyx(ws: WebSocket):
+    """Media-stream de Telnyx ⇄ sesión Gemini Live (persona peluquería). El llamante habla
+    primero (di 'hola'); el bot responde anclado a SALON_PERSONA."""
+    await ws.accept()
+    logger.info("[telnyx] WS conectado (Gemini Live)")
+    model, live_config = _build_config({})        # defaults: SALON_PERSONA + native-audio
+    vad = _vad_from_open(OPEN_PEAK)
+    acc = _AcumuladorTurnos()
+    shared = {"stream_id": None, "bot_speaking": False, "from": None}
+    try:
+        async with _client.aio.live.connect(model=model, config=live_config) as session:
+            logger.info(f"[telnyx] Gemini Live CONECTADO model={model}")
+            up = asyncio.create_task(_telnyx_to_gemini(ws, session, vad, shared))
+            down = asyncio.create_task(_gemini_to_telnyx(ws, session, acc, shared))
+            _, pending = await asyncio.wait({up, down}, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+            logger.info("[telnyx] llamada finalizada")
+    except Exception as e:
+        logger.exception("[telnyx] error en /ws/telnyx")
     finally:
+        # Persistir la conversación (best-effort: nunca rompe el cierre del WS).
+        try:
+            turnos = acc.finalizar()
+            if turnos:
+                user_id = (shared.get("from") or "telefono").strip() or "telefono"
+                session_id = await persistence.crear_sesion("demo", user_id, via="telnyx")
+                n = await persistence.guardar_turnos(session_id, turnos)
+                await persistence.cerrar_sesion(session_id, n)
+                asyncio.create_task(persistence.resumir_sesion(session_id))
+                logger.info(f"[telnyx] sesión {session_id} persistida ({n} turnos)")
+        except Exception:
+            logger.exception("[telnyx] no pude persistir la sesión; se ignora")
         try:
             await ws.close()
         except Exception:
