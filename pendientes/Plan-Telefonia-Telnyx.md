@@ -181,6 +181,27 @@ hace L16 16 kHz (PR abierto) → perderíamos la ventaja de calidad/latencia.
   La telefonía es ortogonal, pero "tutor por teléfono de verdad" necesitará inyectar el
   material aquí (pendiente aparte).
 
+## 9. Capa de SERVICIOS (multi-vertical) — EN DESARROLLO
+
+Objetivo: una capa por encima del motor de voz para tener **varios servicios de llamada**
+(peluquería, jardines, …), cada uno con su **persona + voz + corpus RAG** (`subject_id`),
+sobre el mismo relay. Es la materialización de "core + verticales".
+
+- **Increment 1 (en curso):** tabla `servicios` (varias filas: `nombre`, `ruta`,
+  `subject_id`, `cfg` jsonb con voz/modelo/persona/idioma/generación/VAD, `es_default`,
+  `activo`). **Enrutado** en `/ws/telnyx`: tras el `start`, se mira la **parte-de-usuario
+  del `to`** ('100@…' → '100') y se carga el servicio con esa `ruta`; si no hay, usa el
+  `es_default` o la `config_telefono` por defecto. CRUD `/api/servicios` (GET/POST/DELETE)
+  y sección "Servicios telefónicos" en el panel (crear/listar/borrar; editar = re-guardar
+  misma ruta, upsert). Para probar sin varios DID: distintas **rutas numéricas** (100 vs
+  200) marcadas desde Zoiper.
+- **Increment 2 (siguiente):** **RAG por servicio** — recuperar del corpus (`subject_id`
+  del servicio) e inyectarlo en la sesión Live. Reto propio: native-audio no recupera solo;
+  opciones a decidir = inyectar top-k en el system prompt al abrir / function-calling (tool
+  de retrieval) por turno. Esto acerca por fin la vía Telnyx (y la Live web) a tener RAG.
+- **Increment 3:** un DID real por servicio (enrutado por número de verdad) y panel de
+  gestión más completo (subir material por servicio → `/ingest` con su `subject_id`).
+
 ## 8. Fuera de alcance (por ahora)
 - Transferencias a humano, IVR/DTMF complejos, grabación/compliance, multi-número,
   colas/horarios. Se abordan cuando inbound básico funcione.

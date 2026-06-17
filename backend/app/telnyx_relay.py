@@ -134,6 +134,33 @@ async def set_telnyx_config(payload: dict):
     return {"ok": True, "cfg": cfg}
 
 
+# --- Servicios telefónicos (capa multi-vertical): cada ruta/DID = persona+voz+corpus ---
+@router.get("/api/servicios")
+async def api_listar_servicios():
+    return {"servicios": await persistence.listar_servicios()}
+
+
+@router.post("/api/servicios")
+async def api_guardar_servicio(payload: dict):
+    """Crea/actualiza (UPSERT por `ruta`) un servicio con la config del panel."""
+    nombre = (payload.get("nombre") or "").strip()
+    ruta = (payload.get("ruta") or "").strip()
+    subject_id = (payload.get("subject_id") or "demo").strip() or "demo"
+    if not nombre or not ruta:
+        return {"ok": False, "error": "nombre y ruta son obligatorios"}
+    cfg = {k: payload.get(k) for k in _CFG_KEYS}
+    sid = await persistence.guardar_servicio(
+        nombre, ruta, subject_id, cfg, bool(payload.get("es_default")))
+    logger.info(f"[telnyx] servicio guardado id={sid} nombre='{nombre}' ruta={ruta} subject={subject_id}")
+    return {"ok": True, "id": sid}
+
+
+@router.delete("/api/servicios/{servicio_id}")
+async def api_borrar_servicio(servicio_id: int):
+    await persistence.borrar_servicio(servicio_id)
+    return {"ok": True}
+
+
 async def _send_audio(ws: WebSocket, pcm16: bytes, stream_id: str | None):
     """Trocea PCM L16 16k en frames de ~20 ms y los manda a Telnyx como eventos `media`."""
     for i in range(0, len(pcm16), OUT_CHUNK):
@@ -265,23 +292,59 @@ async def _gemini_to_telnyx(ws: WebSocket, session, acc: "_AcumuladorTurnos", sh
 
 @router.websocket("/ws/telnyx")
 async def ws_telnyx(ws: WebSocket):
-    """Media-stream de Telnyx ⇄ sesión Gemini Live (persona peluquería). El llamante habla
-    primero (di 'hola'); el bot responde anclado a SALON_PERSONA."""
+    """Media-stream de Telnyx ⇄ sesión Gemini Live. ENRUTA por el número marcado (`to`):
+    cada servicio (peluquería, jardines…) tiene su voz/persona/subject_id. Si no hay
+    servicio para esa ruta, usa el `es_default` o la config por defecto del panel. El
+    llamante habla primero."""
     await ws.accept()
-    logger.info("[telnyx] WS conectado (Gemini Live)")
-    # Config del panel (voz/persona/modelo/VAD); si nunca se guardó → defaults
-    # (SALON_PERSONA + native-audio). Lee de la tabla config_telefono.
-    cfg = {}
+    logger.info("[telnyx] WS conectado")
+    # 1) Esperar el `start` para saber a qué servicio enruta (campo `to`).
+    to = frm = stream_id = None
+    while True:
+        msg = await ws.receive()
+        if msg.get("type") == "websocket.disconnect":
+            return
+        raw = msg.get("text")
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        ev = data.get("event")
+        if ev == "start":
+            st = data.get("start") or {}
+            to, frm = st.get("to"), st.get("from")
+            stream_id = data.get("stream_id") or st.get("stream_id")
+            logger.info(f"[telnyx] START to={to} from={frm} fmt={st.get('media_format')}")
+            break
+        if ev == "stop":
+            return
+    # 2) Resolver el servicio por la parte-de-usuario del `to` ('100@...' -> '100').
+    ruta = (to or "").split("@")[0].strip()
+    svc = None
     try:
-        cfg = await persistence.obtener_config_telefono() or {}
+        svc = await persistence.resolver_servicio(ruta) if ruta else None
     except Exception:
-        logger.exception("[telnyx] no pude cargar config de teléfono; uso defaults")
+        logger.exception("[telnyx] error resolviendo servicio")
+    if svc:
+        cfg = svc.get("cfg") or {}
+        subject_id = svc.get("subject_id") or "demo"
+        logger.info(f"[telnyx] servicio='{svc.get('nombre')}' ruta={ruta} subject={subject_id}")
+    else:
+        try:
+            cfg = await persistence.obtener_config_telefono() or {}
+        except Exception:
+            cfg = {}
+        subject_id = "demo"
+        logger.info(f"[telnyx] sin servicio para ruta='{ruta}'; uso config por defecto del panel")
+    # 3) Abrir Gemini con la config resuelta.
     model, live_config = _build_config(cfg)
     vad = _vad_params(cfg)
     logger.info(f"[telnyx] sesión model={model} voice={cfg.get('voice', 'default')} "
-                f"vad_open={vad['open_peak']}")
+                f"subject={subject_id} vad_open={vad['open_peak']}")
     acc = _AcumuladorTurnos()
-    shared = {"stream_id": None, "bot_speaking": False, "from": None}
+    shared = {"stream_id": stream_id, "bot_speaking": False, "from": frm, "subject_id": subject_id}
     try:
         async with _client.aio.live.connect(model=model, config=live_config) as session:
             logger.info(f"[telnyx] Gemini Live CONECTADO model={model}")
@@ -299,7 +362,8 @@ async def ws_telnyx(ws: WebSocket):
             turnos = acc.finalizar()
             if turnos:
                 user_id = (shared.get("from") or "telefono").strip() or "telefono"
-                session_id = await persistence.crear_sesion("demo", user_id, via="telnyx")
+                session_id = await persistence.crear_sesion(
+                    shared.get("subject_id") or "demo", user_id, via="telnyx")
                 n = await persistence.guardar_turnos(session_id, turnos)
                 await persistence.cerrar_sesion(session_id, n)
                 asyncio.create_task(persistence.resumir_sesion(session_id))

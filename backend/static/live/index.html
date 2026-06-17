@@ -17,7 +17,7 @@
   #panel { width: 360px; min-width:320px; background:#10131a; border-right:1px solid #232834;
            padding:16px; overflow-y:auto; box-sizing:border-box; display:flex; flex-direction:column; }
   #panel label { display:block; font-size:.78rem; color:#c5ccd8; margin:8px 0 3px; }
-  #panel select, #panel textarea, #panel input[type=number] {
+  #panel select, #panel textarea, #panel input[type=number], #panel input[type=text] {
      width:100%; box-sizing:border-box; background:#161a22; color:#e7e9ee;
      border:1px solid #2a2f3a; border-radius:8px; padding:8px; font-size:.9rem; font-family:inherit; }
   #panel textarea { min-height:150px; resize:vertical; line-height:1.4; }
@@ -50,6 +50,13 @@
   button#savePhone { padding:13px 16px; border-radius:10px; border:1px solid #2a3a55; font-size:.95rem;
            cursor:pointer; color:#e7e9ee; background:#172234; margin-left:8px; }
   button#savePhone:hover { border-color:#3a5a8c; }
+  button#svcSave { width:100%; padding:9px; border-radius:8px; border:1px solid #2a3a55; cursor:pointer;
+           color:#e7e9ee; background:#172234; font-size:.85rem; }
+  button#svcSave:hover { border-color:#3a5a8c; }
+  .svc-item { background:#0c0f15; border:1px solid #232834; border-radius:8px; padding:6px 8px;
+              font-size:.8rem; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .svc-item .svc-meta { color:#9aa3b2; font-size:.72rem; margin-top:1px; }
+  .svc-item .svc-del { color:#d9694a; cursor:pointer; font-size:.9rem; flex:none; }
   #status { margin:10px 0; color:#9aa3b2; min-height:1.1em; font-size:.9rem; }
   #chat { flex:1; min-height:0; overflow-y:auto; background:#10131a; border:1px solid #232834;
           border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px; }
@@ -137,6 +144,18 @@
     <textarea id="prompt" spellcheck="false"></textarea>
     <div class="hint" id="promptTokens">Tamaño del prompt: — tokens</div>
     <div class="lock-note" id="lockNote"></div>
+
+    <h2>Servicios telefónicos</h2>
+    <div class="muted" style="font-size:.78rem; margin-bottom:4px">Cada servicio = la config actual de arriba (voz/persona/VAD) + una ruta. Marca esa ruta en el teléfono para hablar con él. Editar = volver a guardar con la misma ruta.</div>
+    <div class="twocol">
+      <div><label for="svcNombre">Nombre</label><input id="svcNombre" type="text" placeholder="Peluquería"></div>
+      <div><label for="svcRuta">Ruta (nº a marcar)</label><input id="svcRuta" type="text" placeholder="100"></div>
+    </div>
+    <label for="svcSubject">Corpus (subject_id) <span class="muted" style="font-size:.72rem">— RAG futuro</span></label>
+    <input id="svcSubject" type="text" placeholder="demo">
+    <div style="margin-top:8px"><button type="button" id="svcSave">💾 Guardar servicio (con la config actual)</button></div>
+    <div id="svcStatus" class="muted" style="font-size:.78rem; min-height:1em; margin-top:4px"></div>
+    <div id="svcList" style="margin-top:6px; display:flex; flex-direction:column; gap:4px"></div>
 
     <h2>Consumo (tokens reales)</h2>
     <div class="usage">

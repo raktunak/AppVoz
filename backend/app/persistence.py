@@ -93,6 +93,21 @@ _DDL = [
         actualizado  TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    # Servicios de llamada (capa multi-vertical): cada uno = persona+voz+corpus propio.
+    # `ruta` = parte-de-usuario SIP / DID que enruta la llamada a este servicio.
+    """
+    CREATE TABLE IF NOT EXISTS servicios (
+        id           BIGSERIAL PRIMARY KEY,
+        nombre       TEXT NOT NULL,
+        ruta         TEXT UNIQUE,
+        subject_id   TEXT NOT NULL DEFAULT 'demo',
+        cfg          JSONB NOT NULL DEFAULT '{}',
+        es_default   BOOLEAN NOT NULL DEFAULT false,
+        activo       BOOLEAN NOT NULL DEFAULT true,
+        creado       TIMESTAMPTZ NOT NULL DEFAULT now(),
+        actualizado  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
     # Índices: lecturas típicas (memoria por usuario+materia, sesiones por
     # materia, turnos de una sesión en orden temporal).
     "CREATE INDEX IF NOT EXISTS idx_sesiones_user_subject ON sesiones (user_id, subject_id)",
@@ -216,6 +231,105 @@ async def obtener_config_telefono() -> dict | None:
         return None
     # asyncpg puede devolver jsonb como str o ya decodificado; normalizamos a dict.
     return json.loads(val) if isinstance(val, str) else val
+
+
+# --------------------------------------------------------------------------- #
+# Servicios de llamada (capa multi-vertical): persona+voz+corpus por servicio.
+# --------------------------------------------------------------------------- #
+def _cfg_a_dict(val):
+    """Normaliza el cfg jsonb (str o dict) a dict."""
+    if val is None:
+        return {}
+    return json.loads(val) if isinstance(val, str) else val
+
+
+async def listar_servicios() -> list[dict]:
+    """Todos los servicios (orden por nombre), con su cfg ya decodificado."""
+    async with engine.connect() as conn:
+        filas = (
+            await conn.execute(
+                text(
+                    "SELECT id, nombre, ruta, subject_id, cfg, es_default, activo "
+                    "FROM servicios ORDER BY nombre"
+                )
+            )
+        ).mappings().all()
+    return [
+        {
+            "id": int(f["id"]),
+            "nombre": f["nombre"],
+            "ruta": f["ruta"],
+            "subject_id": f["subject_id"],
+            "cfg": _cfg_a_dict(f["cfg"]),
+            "es_default": f["es_default"],
+            "activo": f["activo"],
+        }
+        for f in filas
+    ]
+
+
+async def guardar_servicio(
+    nombre: str, ruta: str, subject_id: str, cfg: dict, es_default: bool = False
+) -> int:
+    """UPSERT de un servicio por `ruta` (única). Devuelve su id."""
+    async with engine.begin() as conn:
+        sid = (
+            await conn.execute(
+                text(
+                    "INSERT INTO servicios (nombre, ruta, subject_id, cfg, es_default, actualizado) "
+                    "VALUES (:nombre, :ruta, :subject_id, CAST(:cfg AS jsonb), :es_default, now()) "
+                    "ON CONFLICT (ruta) DO UPDATE SET "
+                    "nombre = EXCLUDED.nombre, subject_id = EXCLUDED.subject_id, "
+                    "cfg = EXCLUDED.cfg, es_default = EXCLUDED.es_default, actualizado = now() "
+                    "RETURNING id"
+                ),
+                {
+                    "nombre": nombre,
+                    "ruta": ruta,
+                    "subject_id": subject_id,
+                    "cfg": json.dumps(cfg or {}),
+                    "es_default": es_default,
+                },
+            )
+        ).scalar_one()
+    return int(sid)
+
+
+async def borrar_servicio(servicio_id: int) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM servicios WHERE id = :id"), {"id": servicio_id}
+        )
+
+
+async def resolver_servicio(ruta: str) -> dict | None:
+    """Servicio activo cuya `ruta` coincide; si no hay, el marcado `es_default`. None si nada."""
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT nombre, subject_id, cfg FROM servicios "
+                    "WHERE activo AND ruta = :r LIMIT 1"
+                ),
+                {"r": ruta},
+            )
+        ).mappings().first()
+        if not row:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT nombre, subject_id, cfg FROM servicios "
+                        "WHERE activo AND es_default LIMIT 1"
+                    )
+                )
+            ).mappings().first()
+    if not row:
+        return None
+    return {
+        "nombre": row["nombre"],
+        "subject_id": row["subject_id"],
+        "cfg": _cfg_a_dict(row["cfg"]),
+    }
 
 
 # --------------------------------------------------------------------------- #

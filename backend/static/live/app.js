@@ -463,4 +463,64 @@ async function guardarConfigTelefono() {
 }
 $("savePhone").addEventListener("click", guardarConfigTelefono);
 
+// ---- Servicios telefónicos (cada ruta/DID = persona+voz+corpus propio) ----
+async function loadServicios() {
+  const cont = $("svcList");
+  try {
+    const r = await fetch("/api/servicios");
+    const j = await r.json();
+    const svcs = j.servicios || [];
+    cont.innerHTML = "";
+    if (!svcs.length) {
+      cont.innerHTML = '<div class="muted" style="font-size:.75rem">Sin servicios aún.</div>';
+      return;
+    }
+    svcs.forEach((s) => {
+      const item = document.createElement("div");
+      item.className = "svc-item";
+      const left = document.createElement("div");
+      const top = document.createElement("div");
+      const nb = document.createElement("b"); nb.textContent = s.nombre;
+      top.appendChild(nb);
+      top.appendChild(document.createTextNode(" · ruta " + (s.ruta || "—")));
+      const meta = document.createElement("div");
+      meta.className = "svc-meta";
+      meta.textContent = "voz " + ((s.cfg && s.cfg.voice) || "—") + " · corpus " + s.subject_id;
+      left.appendChild(top); left.appendChild(meta);
+      const del = document.createElement("span");
+      del.className = "svc-del"; del.textContent = "✕"; del.title = "Borrar servicio";
+      del.addEventListener("click", () => borrarServicio(s.id, s.nombre));
+      item.appendChild(left); item.appendChild(del);
+      cont.appendChild(item);
+    });
+  } catch (e) {
+    cont.innerHTML = '<div class="muted" style="font-size:.75rem">No pude cargar los servicios.</div>';
+  }
+}
+
+async function guardarServicio() {
+  const el = $("svcStatus");
+  const nombre = $("svcNombre").value.trim();
+  const ruta = $("svcRuta").value.trim();
+  if (!nombre || !ruta) { el.textContent = "Pon nombre y ruta."; return; }
+  el.textContent = "Guardando…";
+  try {
+    const body = { ...panelConfig(), nombre, ruta, subject_id: ($("svcSubject").value.trim() || "demo") };
+    const r = await fetch("/api/servicios", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (r.ok && j.ok) { el.textContent = "✓ Servicio '" + nombre + "' guardado (ruta " + ruta + ")."; loadServicios(); }
+    else el.textContent = "Error: " + (j.error || "no se pudo guardar");
+  } catch (e) { el.textContent = "Error: " + e; }
+}
+
+async function borrarServicio(id, nombre) {
+  if (!confirm("¿Borrar el servicio '" + nombre + "'?")) return;
+  try { await fetch("/api/servicios/" + id, { method: "DELETE" }); loadServicios(); }
+  catch (e) {}
+}
+$("svcSave").addEventListener("click", guardarServicio);
+
 loadDefaults().then(loadHistory);
+loadServicios();
