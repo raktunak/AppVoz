@@ -16,6 +16,9 @@ google-genai
 # TTS en streaming (Chirp 3 HD) — Google Cloud
 google-cloud-texttospeech>=2.21.0
 
+# Agenda — Google Calendar API (auth por la SA appvoz-voice, +scope calendar)
+google-api-python-client>=2.100.0
+
 # Voz en llamada (full-duplex): Pipecat + Gemini Live + WebRTC + VAD
 pipecat-ai[google,silero,webrtc]>=1.3.0
 pipecat-ai-small-webrtc-prebuilt
