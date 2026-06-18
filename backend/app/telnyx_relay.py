@@ -142,15 +142,20 @@ async def api_listar_servicios():
 
 @router.post("/api/servicios")
 async def api_guardar_servicio(payload: dict):
-    """Crea/actualiza (UPSERT por `ruta`) un servicio con la config del panel."""
+    """Crea (sin id) o actualiza (con id) un servicio con la config del panel."""
     nombre = (payload.get("nombre") or "").strip()
     ruta = (payload.get("ruta") or "").strip()
     subject_id = (payload.get("subject_id") or "demo").strip() or "demo"
     if not nombre or not ruta:
         return {"ok": False, "error": "nombre y ruta son obligatorios"}
     cfg = {k: payload.get(k) for k in _CFG_KEYS}
-    sid = await persistence.guardar_servicio(
-        nombre, ruta, subject_id, cfg, bool(payload.get("es_default")))
+    try:
+        sid = await persistence.guardar_servicio(
+            nombre, ruta, subject_id, cfg, bool(payload.get("es_default")),
+            servicio_id=payload.get("id"))
+    except Exception as e:
+        logger.warning(f"[telnyx] no pude guardar servicio (ruta='{ruta}'): {e}")
+        return {"ok": False, "error": "no se pudo guardar (¿ruta repetida?)"}
     logger.info(f"[telnyx] servicio guardado id={sid} nombre='{nombre}' ruta={ruta} subject={subject_id}")
     return {"ok": True, "id": sid}
 

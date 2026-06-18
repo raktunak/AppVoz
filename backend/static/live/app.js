@@ -5,6 +5,7 @@ let accTokens = 0, nReports = 0;
 let accAudioIn = 0, accAudioOut = 0, accTextIn = 0, accTextOut = 0;
 let CAPS = {}, USD_EUR = 0.92, VOICE_GENDERS = {};
 let sessionId = null;
+let defaultPersona = "";   // persona por defecto (para servicios nuevos / sin prompt propio)
 
 // ---- identidad de sesión ----
 function newId() {
@@ -90,7 +91,8 @@ async function loadDefaults() {
     VOICE_GENDERS = d.voice_genders || {};
     const models = (d.models || []).map((m) => ({ value: m, label: (CAPS[m] && CAPS[m].label) || m }));
     fillSelect($("model"), models, d.default_model);
-    $("prompt").value = d.persona || "";
+    defaultPersona = d.persona || "";
+    $("prompt").value = defaultPersona;
     renderModel(d.default_model);
     $("model").addEventListener("change", (e) => renderModel(e.target.value));
     $("gender").addEventListener("change", renderVoices);
@@ -445,74 +447,90 @@ $("bargeMinus").addEventListener("click", () => nudgeBarge(-1));
 $("bargePlus").addEventListener("click", () => nudgeBarge(+1));
 renderMicSens(); renderSil(); renderBarge();
 
-// Guarda la config actual del panel para que la usen las llamadas de TELÉFONO (Telnyx).
-async function guardarConfigTelefono() {
-  const el = $("phoneStatus");
-  el.textContent = "Guardando…";
-  try {
-    const r = await fetch("/api/telnyx/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(panelConfig()),
-    });
-    const j = await r.json();
-    el.textContent = (r.ok && j.ok)
-      ? "✓ Guardado para teléfono · voz " + (j.cfg.voice || "—") + " · modelo " + (j.cfg.model || "—")
-      : "Error al guardar la config de teléfono.";
-  } catch (e) { el.textContent = "Error: " + e; }
-}
-$("savePhone").addEventListener("click", guardarConfigTelefono);
+// ===================== Capa de administración de servicios =====================
+// La cuadrícula (#adminView) lista los servicios; al entrar en uno se abre esta misma
+// vista de configuración + chat con su config cargada. Cada servicio = voz+persona+corpus.
+let servicioActual = null;     // servicio abierto (null = creando uno nuevo)
+let editandoServicio = false;  // true solo dentro de la vista de un servicio (gate del auto-guardado)
 
-// ---- Servicios telefónicos (cada ruta/DID = persona+voz+corpus propio) ----
+function showAdmin() {
+  servicioActual = null; editandoServicio = false;   // al volver a la cuadrícula no hay servicio abierto
+  $("servicioView").classList.add("hidden");
+  $("adminView").classList.remove("hidden");
+  loadServicios();
+}
+function showServicio() {
+  $("adminView").classList.add("hidden");
+  $("servicioView").classList.remove("hidden");
+}
+
+// Vuelca la config de un servicio en los controles del panel.
+function applyConfigToPanel(cfg) {
+  cfg = cfg || {};
+  if (cfg.model && CAPS[cfg.model]) $("model").value = cfg.model;
+  renderModel($("model").value);
+  $("gender").value = "todas"; renderVoices();
+  if (cfg.voice && [...$("voice").options].some((o) => o.value === cfg.voice)) $("voice").value = cfg.voice;
+  if (cfg.language && !$("langBox").classList.contains("hidden")) $("language").value = cfg.language;
+  $("temp").value = (cfg.temperature == null) ? "" : cfg.temperature;
+  $("maxtok").value = (cfg.max_output_tokens == null) ? "" : cfg.max_output_tokens;
+  $("affective").checked = !!cfg.affective_dialog;
+  $("proactive").checked = !!cfg.proactivity;
+  $("prompt").value = (cfg.system_instruction != null) ? cfg.system_instruction : defaultPersona;
+  if (cfg.mic_threshold != null) {
+    $("micSens").value = Math.max(0, Math.min(100,
+      Math.round((3000 - Number(cfg.mic_threshold)) / (3000 - 600) * 100)));
+  }
+  if (cfg.end_silence != null) $("silSlider").value = Math.max(3, Math.min(30, Number(cfg.end_silence)));
+  if (cfg.barge_frames != null) $("bargeSlider").value = Math.max(2, Math.min(12, Number(cfg.barge_frames)));
+  renderMicSens(); renderSil(); renderBarge(); countPromptTokens();
+}
+
+// Abre un servicio existente (o null = nuevo) en la vista de configuración + chat.
+function abrirServicio(svc) {
+  editandoServicio = false;   // mientras volcamos la config no debe auto-guardar
+  servicioActual = svc;
+  $("svcNombre").value = svc ? (svc.nombre || "") : "";
+  $("svcRuta").value = svc ? (svc.ruta || "") : "";
+  $("svcSubject").value = (svc && svc.subject_id) ? svc.subject_id : "demo";
+  $("svcTitle").textContent = svc ? (svc.nombre || "Servicio") : "Nuevo servicio";
+  applyConfigToPanel(svc ? svc.cfg : {});
+  $("svcStatus").textContent = svc ? "" : "Pon Nombre y Ruta para crear el servicio.";
+  clearChat();
+  showServicio();
+  editandoServicio = true;    // a partir de aquí, cualquier cambio se auto-guarda
+}
+
+// Cuadrícula de servicios (vista admin).
 async function loadServicios() {
-  const cont = $("svcList");
+  const cont = $("svcGrid");
+  cont.innerHTML = "";
+  const nueva = document.createElement("div");
+  nueva.className = "card new"; nueva.textContent = "+ Nuevo servicio";
+  nueva.addEventListener("click", () => abrirServicio(null));
+  cont.appendChild(nueva);
   try {
-    const r = await fetch("/api/servicios");
-    const j = await r.json();
-    const svcs = j.servicios || [];
-    cont.innerHTML = "";
-    if (!svcs.length) {
-      cont.innerHTML = '<div class="muted" style="font-size:.75rem">Sin servicios aún.</div>';
-      return;
-    }
-    svcs.forEach((s) => {
-      const item = document.createElement("div");
-      item.className = "svc-item";
-      const left = document.createElement("div");
-      const top = document.createElement("div");
-      const nb = document.createElement("b"); nb.textContent = s.nombre;
-      top.appendChild(nb);
-      top.appendChild(document.createTextNode(" · ruta " + (s.ruta || "—")));
-      const meta = document.createElement("div");
-      meta.className = "svc-meta";
-      meta.textContent = "voz " + ((s.cfg && s.cfg.voice) || "—") + " · corpus " + s.subject_id;
-      left.appendChild(top); left.appendChild(meta);
+    const j = await (await fetch("/api/servicios")).json();
+    (j.servicios || []).forEach((s) => {
+      const card = document.createElement("div");
+      card.className = "card";
       const del = document.createElement("span");
-      del.className = "svc-del"; del.textContent = "✕"; del.title = "Borrar servicio";
-      del.addEventListener("click", () => borrarServicio(s.id, s.nombre));
-      item.appendChild(left); item.appendChild(del);
-      cont.appendChild(item);
+      del.className = "c-del"; del.textContent = "✕"; del.title = "Borrar servicio";
+      del.addEventListener("click", (e) => { e.stopPropagation(); borrarServicio(s.id, s.nombre); });
+      const name = document.createElement("div");
+      name.className = "c-name"; name.textContent = s.nombre;
+      const meta = document.createElement("div");
+      meta.className = "c-meta";
+      meta.textContent = "ruta " + (s.ruta || "—") + " · voz " + ((s.cfg && s.cfg.voice) || "—");
+      card.appendChild(del); card.appendChild(name); card.appendChild(meta);
+      card.addEventListener("click", () => abrirServicio(s));
+      cont.appendChild(card);
     });
   } catch (e) {
-    cont.innerHTML = '<div class="muted" style="font-size:.75rem">No pude cargar los servicios.</div>';
+    const err = document.createElement("div");
+    err.className = "muted"; err.textContent = "No pude cargar los servicios.";
+    cont.appendChild(err);
   }
-}
-
-async function guardarServicio() {
-  const el = $("svcStatus");
-  const nombre = $("svcNombre").value.trim();
-  const ruta = $("svcRuta").value.trim();
-  if (!nombre || !ruta) { el.textContent = "Pon nombre y ruta."; return; }
-  el.textContent = "Guardando…";
-  try {
-    const body = { ...panelConfig(), nombre, ruta, subject_id: ($("svcSubject").value.trim() || "demo") };
-    const r = await fetch("/api/servicios", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    });
-    const j = await r.json();
-    if (r.ok && j.ok) { el.textContent = "✓ Servicio '" + nombre + "' guardado (ruta " + ruta + ")."; loadServicios(); }
-    else el.textContent = "Error: " + (j.error || "no se pudo guardar");
-  } catch (e) { el.textContent = "Error: " + e; }
 }
 
 async function borrarServicio(id, nombre) {
@@ -520,7 +538,55 @@ async function borrarServicio(id, nombre) {
   try { await fetch("/api/servicios/" + id, { method: "DELETE" }); loadServicios(); }
   catch (e) {}
 }
-$("svcSave").addEventListener("click", guardarServicio);
 
-loadDefaults().then(loadHistory);
-loadServicios();
+// Auto-guardado: en cuanto un servicio tiene Nombre + Ruta se CREA solo, y cualquier
+// cambio posterior (voz/persona/VAD…) se persiste automáticamente. Sin botón de guardar.
+// Crea/actualiza por id, así teclear la ruta letra a letra no genera servicios duplicados.
+let autoSaveTimer = null;
+function autoGuardar() {
+  if (!editandoServicio) return;                 // solo dentro de la vista de un servicio
+  const nombre = $("svcNombre").value.trim();
+  const ruta = $("svcRuta").value.trim();
+  if (!nombre || !ruta) {                        // aún sin lo mínimo para crear
+    $("svcStatus").textContent = "Pon Nombre y Ruta para crear el servicio.";
+    return;
+  }
+  $("svcStatus").textContent = "Guardando…";
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(async () => {
+    try {
+      const creando = !(servicioActual && servicioActual.id);
+      const body = {
+        ...panelConfig(),
+        id: creando ? undefined : servicioActual.id,   // con id → UPDATE; sin id → CREATE
+        nombre, ruta, subject_id: ($("svcSubject").value.trim() || "demo"),
+      };
+      const j = await (await fetch("/api/servicios", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      })).json();
+      if (j.ok) {
+        servicioActual = { id: j.id, nombre, ruta, subject_id: body.subject_id, cfg: panelConfig() };
+        $("svcTitle").textContent = nombre;
+        $("svcStatus").textContent = creando ? "✓ Servicio creado" : "✓ Guardado";
+      } else {
+        $("svcStatus").textContent = "Error: " + (j.error || "no se pudo guardar");
+      }
+    } catch (e) { $("svcStatus").textContent = "Error: " + e; }
+  }, 600);
+}
+
+// Cablea el auto-guardado a todos los controles (datos del servicio + voz/persona/VAD…).
+function wireAutosave() {
+  ["model", "gender", "voice", "language", "affective", "proactive"]
+    .forEach((id) => $(id).addEventListener("change", autoGuardar));
+  ["svcNombre", "svcRuta", "svcSubject", "temp", "maxtok", "prompt", "micSens", "silSlider", "bargeSlider"]
+    .forEach((id) => $(id).addEventListener("input", autoGuardar));
+  ["micMinus", "micPlus", "silMinus", "silPlus", "bargeMinus", "bargePlus"]
+    .forEach((id) => $(id).addEventListener("click", autoGuardar));
+}
+
+$("backToAdmin").addEventListener("click", showAdmin);
+wireAutosave();
+
+// Arranque: cargar capacidades (para poder volcar configs) y luego la cuadrícula.
+loadDefaults().then(() => { loadHistory(); loadServicios(); });

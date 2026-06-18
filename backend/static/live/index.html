@@ -3,17 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AppVoz · Banco de pruebas de voz (Gemini Live / Vertex)</title>
+<title>AppVoz · Servicios de voz</title>
 <style>
   :root { color-scheme: dark; }
   html, body { height: 100%; margin: 0; }
   body { font-family: system-ui, sans-serif; background:#0f1115; color:#e7e9ee;
-         display:flex; height:100vh; box-sizing:border-box; }
+         height:100vh; box-sizing:border-box; }
   h1 { font-size: 1.05rem; margin: 0 0 4px; }
   h2 { font-size: .78rem; text-transform:uppercase; letter-spacing:.04em; color:#9aa3b2;
        margin: 14px 0 6px; }
   .muted { color:#9aa3b2; font-size:.82rem; }
+  .hidden { display:none !important; }
 
+  /* ---------- Capa de administración (cuadrícula de servicios) ---------- */
+  #adminView { height:100vh; overflow-y:auto; box-sizing:border-box; padding:28px 32px; }
+  #adminView .head { max-width:1000px; margin:0 auto 18px; }
+  #svcGrid { max-width:1000px; margin:0 auto; display:grid;
+             grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:14px; }
+  .card { background:#10131a; border:1px solid #232834; border-radius:14px; padding:18px;
+          cursor:pointer; position:relative; transition:border-color .12s, background .12s; }
+  .card:hover { border-color:#2e6b4a; background:#141925; }
+  .card .c-name { font-size:1.05rem; font-weight:600; }
+  .card .c-meta { color:#9aa3b2; font-size:.78rem; margin-top:8px; }
+  .card .c-del { position:absolute; top:9px; right:12px; color:#d9694a; cursor:pointer;
+                 font-size:1rem; opacity:.55; }
+  .card .c-del:hover { opacity:1; }
+  .card.new { border-style:dashed; display:flex; align-items:center; justify-content:center;
+              color:#7fd1a3; min-height:96px; font-size:.95rem; }
+
+  /* ---------- Vista de un servicio (panel + chat) ---------- */
+  #servicioView { display:flex; height:100vh; box-sizing:border-box; }
   #panel { width: 360px; min-width:320px; background:#10131a; border-right:1px solid #232834;
            padding:16px; overflow-y:auto; box-sizing:border-box; display:flex; flex-direction:column; }
   #panel label { display:block; font-size:.78rem; color:#c5ccd8; margin:8px 0 3px; }
@@ -28,7 +47,13 @@
   .check input { width:auto; }
   .twocol { display:flex; gap:10px; }
   .twocol > div { flex:1; }
-  .hidden { display:none !important; }
+
+  .back-btn { align-self:flex-start; background:#161a22; color:#e7e9ee; border:1px solid #2a2f3a;
+              border-radius:8px; padding:6px 10px; cursor:pointer; font-size:.82rem; margin-bottom:8px; }
+  .back-btn:hover { border-color:#2e6b4a; }
+  button#svcSave { width:100%; padding:9px; border-radius:8px; border:1px solid #2a3a55; cursor:pointer;
+           color:#e7e9ee; background:#172234; font-size:.85rem; }
+  button#svcSave:hover { border-color:#3a5a8c; }
 
   .slider-row { display:flex; align-items:center; gap:8px; }
   .slider-row input[type=range] { flex:1; min-width:0; accent-color:#3a8c5e; }
@@ -47,16 +72,6 @@
   button#call { padding:13px 20px; border-radius:10px; border:1px solid #2e6b4a; font-size:1.05rem;
            cursor:pointer; color:#e7e9ee; background:#1b2b22; }
   button#call.on { background:#3a1b1b; border-color:#a33; }
-  button#savePhone { padding:13px 16px; border-radius:10px; border:1px solid #2a3a55; font-size:.95rem;
-           cursor:pointer; color:#e7e9ee; background:#172234; margin-left:8px; }
-  button#savePhone:hover { border-color:#3a5a8c; }
-  button#svcSave { width:100%; padding:9px; border-radius:8px; border:1px solid #2a3a55; cursor:pointer;
-           color:#e7e9ee; background:#172234; font-size:.85rem; }
-  button#svcSave:hover { border-color:#3a5a8c; }
-  .svc-item { background:#0c0f15; border:1px solid #232834; border-radius:8px; padding:6px 8px;
-              font-size:.8rem; display:flex; justify-content:space-between; align-items:center; gap:8px; }
-  .svc-item .svc-meta { color:#9aa3b2; font-size:.72rem; margin-top:1px; }
-  .svc-item .svc-del { color:#d9694a; cursor:pointer; font-size:.9rem; flex:none; }
   #status { margin:10px 0; color:#9aa3b2; min-height:1.1em; font-size:.9rem; }
   #chat { flex:1; min-height:0; overflow-y:auto; background:#10131a; border:1px solid #232834;
           border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px; }
@@ -78,111 +93,117 @@
 </style>
 </head>
 <body>
-  <aside id="panel">
-    <h1>⚙️ Ajustes de Live</h1>
-    <div class="muted">Vertex AI · se aplican al iniciar la llamada.</div>
-
-    <h2>Modelo</h2>
-    <select id="model"></select>
-    <div class="hint" id="modelHint"></div>
-
-    <h2>Voz</h2>
-    <select id="gender">
-      <option value="todas">Todas las voces</option>
-      <option value="femenina">Femeninas</option>
-      <option value="masculina">Masculinas</option>
-    </select>
-    <select id="voice" style="margin-top:6px"></select>
-
-    <div id="langBox">
-      <h2>Idioma</h2>
-      <select id="language"></select>
-      <div class="hint" id="langHint"></div>
+  <!-- ===================== CAPA DE ADMINISTRACIÓN ===================== -->
+  <div id="adminView">
+    <div class="head">
+      <h1>🎙️ AppVoz · Servicios de voz</h1>
+      <div class="muted" style="margin-top:6px">Cada servicio tiene su voz, su persona y (próximamente) su material. Pulsa uno para configurarlo y probarlo; marca su número desde el teléfono para hablar con él.</div>
     </div>
+    <div id="svcGrid"></div>
+  </div>
 
-    <div id="featBox">
-      <h2>Inmersión (native-audio)</h2>
-      <label class="check"><input type="checkbox" id="affective"> Affective dialog (interpreta tono/emoción)</label>
-      <label class="check"><input type="checkbox" id="proactive"> Proactividad (decide cuándo hablar/callar)</label>
-      <div class="hint">Experimental: si la sesión falla al activarlas, desmárcalas.</div>
-    </div>
+  <!-- ===================== VISTA DE UN SERVICIO ===================== -->
+  <div id="servicioView" class="hidden">
+    <aside id="panel">
+      <button id="backToAdmin" class="back-btn">← Servicios</button>
+      <h1 id="svcTitle">Servicio</h1>
+      <div class="muted">Vertex AI · se aplica al iniciar la llamada / al guardar.</div>
 
-    <h2>Micrófono</h2>
-    <div class="muted" style="font-size:.78rem; margin-bottom:4px">Las tres se ajustan en vivo, incluso en plena llamada.</div>
+      <h2>Datos del servicio</h2>
+      <div class="twocol">
+        <div><label for="svcNombre">Nombre</label><input id="svcNombre" type="text" placeholder="Peluquería"></div>
+        <div><label for="svcRuta">Ruta (nº a marcar)</label><input id="svcRuta" type="text" placeholder="100"></div>
+      </div>
+      <label for="svcSubject">Corpus (subject_id) <span class="muted" style="font-size:.72rem">— RAG futuro</span></label>
+      <input id="svcSubject" type="text" placeholder="demo">
+      <div id="svcStatus" class="muted" style="font-size:.78rem; min-height:1em; margin-top:6px">Los cambios se guardan solos.</div>
 
-    <label for="micSens">Sensibilidad · <b id="micLevel">Alta</b> · <span id="micSensVal">umbral 1300</span></label>
-    <div class="slider-row live">
-      <button type="button" id="micMinus" class="step" title="Menos sensible (ignora más ruido)">−</button>
-      <input type="range" id="micSens" min="0" max="100" step="2" value="71">
-      <button type="button" id="micPlus" class="step" title="Más sensible (capta voz más baja)">＋</button>
-    </div>
-    <div class="hint"><b>Qué hace:</b> umbral de energía para que tu voz <i>abra</i> turno; por debajo se descarta como ruido. <b>Cuándo:</b> súbela (der.) en sitio silencioso o si te come palabras; bájala (izq.) si el ruido de fondo abre turnos solo.</div>
+      <h2>Modelo</h2>
+      <select id="model"></select>
+      <div class="hint" id="modelHint"></div>
 
-    <label for="silSlider" style="margin-top:12px">Pausa fin de turno · <span id="silVal">1.0&nbsp;s</span></label>
-    <div class="slider-row live">
-      <button type="button" id="silMinus" class="step" title="Responde antes (te corta si pausas)">−</button>
-      <input type="range" id="silSlider" min="3" max="30" step="1" value="12">
-      <button type="button" id="silPlus" class="step" title="Más paciente con tus pausas">＋</button>
-    </div>
-    <div class="hint"><b>Qué hace:</b> silencio continuo que espera antes de dar tu turno por <i>terminado</i> y responder. <b>Cuándo:</b> bájala (izq.) para respuestas más ágiles; súbela (der.) si te corta al hacer pausas pensando.</div>
+      <h2>Voz</h2>
+      <select id="gender">
+        <option value="todas">Todas las voces</option>
+        <option value="femenina">Femeninas</option>
+        <option value="masculina">Masculinas</option>
+      </select>
+      <select id="voice" style="margin-top:6px"></select>
 
-    <label for="bargeSlider" style="margin-top:12px">Resistencia a cortes · <span id="bargeVal">0.5&nbsp;s</span></label>
-    <div class="slider-row live">
-      <button type="button" id="bargeMinus" class="step" title="Más fácil interrumpir al bot">−</button>
-      <input type="range" id="bargeSlider" min="2" max="12" step="1" value="6">
-      <button type="button" id="bargePlus" class="step" title="Ignora más ruido al interrumpir">＋</button>
-    </div>
-    <div class="hint"><b>Qué hace:</b> voz sostenida necesaria para <i>cortar</i> al bot mientras habla; un pico corto (tos/ruido) no llega y no le interrumpe. <b>Cuándo:</b> súbela (der.) si toses/ruidos le cortan a media frase; bájala (izq.) para poder interrumpirle al instante.</div>
+      <div id="langBox">
+        <h2>Idioma</h2>
+        <select id="language"></select>
+        <div class="hint" id="langHint"></div>
+      </div>
 
-    <h2>Generación</h2>
-    <div class="twocol">
-      <div><label for="temp">Temperatura</label><input id="temp" type="number" step="0.1" min="0" max="2" placeholder="auto"></div>
-      <div><label for="maxtok">Máx. tokens salida</label><input id="maxtok" type="number" step="1" min="1" placeholder="auto"></div>
-    </div>
+      <div id="featBox">
+        <h2>Inmersión (native-audio)</h2>
+        <label class="check"><input type="checkbox" id="affective"> Affective dialog (interpreta tono/emoción)</label>
+        <label class="check"><input type="checkbox" id="proactive"> Proactividad (decide cuándo hablar/callar)</label>
+        <div class="hint">Experimental: si la sesión falla al activarlas, desmárcalas.</div>
+      </div>
 
-    <h2>Prompt (system instruction)</h2>
-    <textarea id="prompt" spellcheck="false"></textarea>
-    <div class="hint" id="promptTokens">Tamaño del prompt: — tokens</div>
-    <div class="lock-note" id="lockNote"></div>
+      <h2>Micrófono</h2>
+      <div class="muted" style="font-size:.78rem; margin-bottom:4px">Las tres se ajustan en vivo, incluso en plena llamada.</div>
 
-    <h2>Servicios telefónicos</h2>
-    <div class="muted" style="font-size:.78rem; margin-bottom:4px">Cada servicio = la config actual de arriba (voz/persona/VAD) + una ruta. Marca esa ruta en el teléfono para hablar con él. Editar = volver a guardar con la misma ruta.</div>
-    <div class="twocol">
-      <div><label for="svcNombre">Nombre</label><input id="svcNombre" type="text" placeholder="Peluquería"></div>
-      <div><label for="svcRuta">Ruta (nº a marcar)</label><input id="svcRuta" type="text" placeholder="100"></div>
-    </div>
-    <label for="svcSubject">Corpus (subject_id) <span class="muted" style="font-size:.72rem">— RAG futuro</span></label>
-    <input id="svcSubject" type="text" placeholder="demo">
-    <div style="margin-top:8px"><button type="button" id="svcSave">💾 Guardar servicio (con la config actual)</button></div>
-    <div id="svcStatus" class="muted" style="font-size:.78rem; min-height:1em; margin-top:4px"></div>
-    <div id="svcList" style="margin-top:6px; display:flex; flex-direction:column; gap:4px"></div>
+      <label for="micSens">Sensibilidad · <b id="micLevel">Alta</b> · <span id="micSensVal">umbral 1300</span></label>
+      <div class="slider-row live">
+        <button type="button" id="micMinus" class="step" title="Menos sensible (ignora más ruido)">−</button>
+        <input type="range" id="micSens" min="0" max="100" step="2" value="71">
+        <button type="button" id="micPlus" class="step" title="Más sensible (capta voz más baja)">＋</button>
+      </div>
+      <div class="hint"><b>Qué hace:</b> umbral de energía para que tu voz <i>abra</i> turno; por debajo se descarta como ruido. <b>Cuándo:</b> súbela (der.) en sitio silencioso o si te come palabras; bájala (izq.) si el ruido de fondo abre turnos solo.</div>
 
-    <h2>Consumo (tokens reales)</h2>
-    <div class="usage">
-      <div class="row"><span>Último turno · total</span><b id="uTotal">—</b></div>
-      <div class="row sub"><span>entrada / salida</span><span><b id="uPrompt">—</b> / <b id="uResp">—</b></span></div>
-      <div class="row sub"><span>audio (in/out)</span><span id="uAudio">—</span></div>
-      <div class="row" style="margin-top:6px"><span>Acumulado sesión (Σ turnos)</span><b id="uAcc">0</b></div>
-      <div class="row sub"><span>turnos</span><b id="uTurns">0</b></div>
-      <div class="row" style="margin-top:6px"><span>Coste sesión (≈ €)</span><b id="uCost">—</b></div>
-      <div class="hint" id="priceHint"></div>
-    </div>
+      <label for="silSlider" style="margin-top:12px">Pausa fin de turno · <span id="silVal">1.0&nbsp;s</span></label>
+      <div class="slider-row live">
+        <button type="button" id="silMinus" class="step" title="Responde antes (te corta si pausas)">−</button>
+        <input type="range" id="silSlider" min="3" max="30" step="1" value="12">
+        <button type="button" id="silPlus" class="step" title="Más paciente con tus pausas">＋</button>
+      </div>
+      <div class="hint"><b>Qué hace:</b> silencio continuo que espera antes de dar tu turno por <i>terminado</i> y responder. <b>Cuándo:</b> bájala (izq.) para respuestas más ágiles; súbela (der.) si te corta al hacer pausas pensando.</div>
 
-    <h2>Historial</h2>
-    <div id="history"></div>
-  </aside>
+      <label for="bargeSlider" style="margin-top:12px">Resistencia a cortes · <span id="bargeVal">0.5&nbsp;s</span></label>
+      <div class="slider-row live">
+        <button type="button" id="bargeMinus" class="step" title="Más fácil interrumpir al bot">−</button>
+        <input type="range" id="bargeSlider" min="2" max="12" step="1" value="6">
+        <button type="button" id="bargePlus" class="step" title="Ignora más ruido al interrumpir">＋</button>
+      </div>
+      <div class="hint"><b>Qué hace:</b> voz sostenida necesaria para <i>cortar</i> al bot mientras habla; un pico corto (tos/ruido) no llega y no le interrumpe. <b>Cuándo:</b> súbela (der.) si toses/ruidos le cortan a media frase; bájala (izq.) para poder interrumpirle al instante.</div>
 
-  <main id="main">
-    <h1>🎙️ AppVoz · Llamada</h1>
-    <div class="muted">Habla normal; el modelo detecta el idioma. Pausa ~1s al terminar el turno.</div>
-    <div style="margin-top:10px">
-      <button id="call">☎ Iniciar llamada</button>
-      <button id="savePhone" title="Guarda la voz/persona/modelo/ajustes actuales para que los usen las llamadas de teléfono (Telnyx)">📞 Guardar para teléfono</button>
-    </div>
-    <div id="phoneStatus" class="muted" style="font-size:.8rem; min-height:1em; margin-top:6px"></div>
-    <div id="status">Cargando ajustes…</div>
-    <div id="chat"></div>
-  </main>
+      <h2>Generación</h2>
+      <div class="twocol">
+        <div><label for="temp">Temperatura</label><input id="temp" type="number" step="0.1" min="0" max="2" placeholder="auto"></div>
+        <div><label for="maxtok">Máx. tokens salida</label><input id="maxtok" type="number" step="1" min="1" placeholder="auto"></div>
+      </div>
+
+      <h2>Prompt (system instruction)</h2>
+      <textarea id="prompt" spellcheck="false"></textarea>
+      <div class="hint" id="promptTokens">Tamaño del prompt: — tokens</div>
+      <div class="lock-note" id="lockNote"></div>
+
+      <h2>Consumo (tokens reales)</h2>
+      <div class="usage">
+        <div class="row"><span>Último turno · total</span><b id="uTotal">—</b></div>
+        <div class="row sub"><span>entrada / salida</span><span><b id="uPrompt">—</b> / <b id="uResp">—</b></span></div>
+        <div class="row sub"><span>audio (in/out)</span><span id="uAudio">—</span></div>
+        <div class="row" style="margin-top:6px"><span>Acumulado sesión (Σ turnos)</span><b id="uAcc">0</b></div>
+        <div class="row sub"><span>turnos</span><b id="uTurns">0</b></div>
+        <div class="row" style="margin-top:6px"><span>Coste sesión (≈ €)</span><b id="uCost">—</b></div>
+        <div class="hint" id="priceHint"></div>
+      </div>
+
+      <h2>Historial</h2>
+      <div id="history"></div>
+    </aside>
+
+    <main id="main">
+      <h1 id="mainTitle">🎙️ Llamada de prueba</h1>
+      <div class="muted">Habla normal; el modelo detecta el idioma. Pausa ~1s al terminar el turno.</div>
+      <div style="margin-top:10px"><button id="call">☎ Iniciar llamada</button></div>
+      <div id="status">Cargando ajustes…</div>
+      <div id="chat"></div>
+    </main>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>

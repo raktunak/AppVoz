@@ -269,27 +269,33 @@ async def listar_servicios() -> list[dict]:
 
 
 async def guardar_servicio(
-    nombre: str, ruta: str, subject_id: str, cfg: dict, es_default: bool = False
+    nombre: str, ruta: str, subject_id: str, cfg: dict,
+    es_default: bool = False, servicio_id: int | None = None
 ) -> int:
-    """UPSERT de un servicio por `ruta` (única). Devuelve su id."""
+    """Crea (sin id → INSERT) o actualiza (con id → UPDATE) un servicio. Devuelve su id.
+    Actualizar por id evita duplicados cuando el auto-guardado dispara mientras se teclea
+    la ruta letra a letra (la primera vez crea, las siguientes actualizan la misma fila)."""
+    params = {
+        "nombre": nombre, "ruta": ruta, "subject_id": subject_id,
+        "cfg": json.dumps(cfg or {}), "es_default": es_default,
+    }
     async with engine.begin() as conn:
+        if servicio_id:
+            await conn.execute(
+                text(
+                    "UPDATE servicios SET nombre=:nombre, ruta=:ruta, subject_id=:subject_id, "
+                    "cfg=CAST(:cfg AS jsonb), es_default=:es_default, actualizado=now() WHERE id=:id"
+                ),
+                {**params, "id": servicio_id},
+            )
+            return int(servicio_id)
         sid = (
             await conn.execute(
                 text(
-                    "INSERT INTO servicios (nombre, ruta, subject_id, cfg, es_default, actualizado) "
-                    "VALUES (:nombre, :ruta, :subject_id, CAST(:cfg AS jsonb), :es_default, now()) "
-                    "ON CONFLICT (ruta) DO UPDATE SET "
-                    "nombre = EXCLUDED.nombre, subject_id = EXCLUDED.subject_id, "
-                    "cfg = EXCLUDED.cfg, es_default = EXCLUDED.es_default, actualizado = now() "
-                    "RETURNING id"
+                    "INSERT INTO servicios (nombre, ruta, subject_id, cfg, es_default) "
+                    "VALUES (:nombre, :ruta, :subject_id, CAST(:cfg AS jsonb), :es_default) RETURNING id"
                 ),
-                {
-                    "nombre": nombre,
-                    "ruta": ruta,
-                    "subject_id": subject_id,
-                    "cfg": json.dumps(cfg or {}),
-                    "es_default": es_default,
-                },
+                params,
             )
         ).scalar_one()
     return int(sid)
