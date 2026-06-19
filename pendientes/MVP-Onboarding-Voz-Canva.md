@@ -57,12 +57,33 @@ vacíos), **no** el criterio del LLM. Las preguntas literales salen de [[Entrevi
 - **Modelo de datos mínimo:** `pep` (vision, mision, valores[]), `pilares`, `roles`,
   `bloques`. (Subconjunto del modelo 4G completo; objetivos T.A.R.G.E.T. = opcional en MVP.)
 
+## Decisiones (2026-06-19)
+- **RAG fuera del MVP:** la entrevistadora conduce desde su persona/guion (preguntas
+  literales), captura determinista; el RAG del libro (`subject_id="libro-4g"`) es mejora
+  posterior. El servicio ya lleva ese `subject_id` para tenerlo preparado.
+- **BD:** una sola Postgres + pgvector **compartidas**, aislamiento **lógico por `subject_id`**
+  (no BD física por servicio). Separación física / **Row-Level Security** = mejora cuando se
+  productice el multi-tenant.
+- **Prompt:** se itera de continuo y es editable por servicio (`cfg.system_instruction`);
+  probablemente troceado por sección. El éxito NO cuelga del prompt (captura determinista).
+- **Servicio "4g" creado** (id=9): persona entrevistadora v1, voz Aoede, `subject_id="libro-4g"`.
+
 ## Próximos pasos
 1. Derivar el **esquema de campos exacto por sección** (a partir de la entrevista literal).
 2. **Frontend:** pantalla Canva + stepper que se rellena en vivo.
 3. **Persona/guion** del entrevistador (system prompt) por sección + **extracción estructurada
    determinista** de cada respuesta.
 4. **Cierre:** agendar el primer bloque con `agenda.py`.
+
+## Mejoras de UX pendientes (anotado 2026-06-19 — NO ejecutado)
+- **Botón "⚙ Configuración" en `/4g`** → deep-link a **`/call?svc=4g`** que auto-abra el editor
+  del servicio "4g". Permite tunear modelo / voz / persona-prompt / VAD del onboarding **sin salir**
+  de la pantalla del Canva. Implementación: leer el parámetro `svc` en el `app.js` del panel
+  (abrir ese servicio al cargar) + añadir el botón en la cabecera de `/4g`. (Alternativa
+  descartada: incrustar los ajustes dentro de `/4g` — duplica el panel.)
+- **Fix menor del stepper:** al cargar, `/4g` marca una sección como completa por la **existencia
+  de la clave** en el Canva (una visión vacía sale con ✓), no por `seccion_completa` real. Usar la
+  lógica de completitud real al pintar el stepper inicial.
 
 Fuentes: [[MVP-Demo-Muestra-de-Fuerza]], [[Entrevista-4G-Preguntas-Literales]],
 repo `c:\AppVoz` (`agenda.py`, `live_relay.py`, `persistence.py`).

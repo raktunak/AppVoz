@@ -3,10 +3,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from .canva4g import crear_tablas_4g
 from .chunking import chunk_text
 from .db import engine
 from .embeddings import embed_texts, to_pgvector
 from .live_relay import router as live_router
+from .onboarding_4g import router as onboarding_4g_router
 from .persistence import crear_tablas
 from .rag import retrieve
 from .telnyx_relay import router as telnyx_router
@@ -16,12 +18,15 @@ app = FastAPI(title="AppVoz — Motor Tutor por Voz", version="0.5.0")
 app.include_router(voice_router)
 app.include_router(live_router)  # /ws/call (Gemini Live directo)
 app.include_router(telnyx_router)  # /telnyx/voice (webhook) + /ws/telnyx (media-stream)
+app.include_router(onboarding_4g_router)  # /ws/4g (onboarding 4G por voz → Canva → Calendar)
 
 
 @app.on_event("startup")
 async def _startup():
     # Tablas de la Fase 1 (sesiones, turnos, memoria_usuario); idempotente.
     await crear_tablas()
+    # Tabla del Canva 4G (onboarding); idempotente.
+    await crear_tablas_4g()
 
 
 # ---------- Salud ----------
@@ -89,6 +94,7 @@ async def search(req: SearchRequest):
     return {"query": req.query, "subject_id": req.subject_id, "results": results}
 
 
-# Frontends estáticos: llamada directa (/call) y banco de voz v1 (/ui)
+# Frontends estáticos: onboarding 4G (/4g), llamada directa (/call) y banco de voz v1 (/ui)
+app.mount("/4g", StaticFiles(directory="static/4g", html=True), name="4g")
 app.mount("/call", StaticFiles(directory="static/live", html=True), name="call")
 app.mount("/ui", StaticFiles(directory="static", html=True), name="ui")
