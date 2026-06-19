@@ -1,65 +1,96 @@
-"""Onboarding 4G: modelo del Canva + extracción DETERMINISTA por sección.
+"""Onboarding 4G: modelo del Canva + extracción DETERMINISTA por sección (con apartados).
 
-El "Canva" es la Plataforma Estratégica Personal del método 4G. Esta capa define las
-SECCIONES (Visión → Misión → Valores → Pilares → Roles → Primer bloque), persiste el
-Canva por usuario (tabla `canva_4g`, una fila JSONB por user_id) y extrae de la
-conversación, sección a sección, los campos con Gemini Flash.
+El "Canva" es la Plataforma Estratégica Personal del método 4G. Cada sección tiene
+**apartados** (sub-campos) que se rellenan y se marcan en verde en vivo según la extracción
+los va capturando. Las secciones "fijas" tienen apartados con nombre (Visión: ser/hacer/tener;
+Pilares: 4 áreas); las de "lista" (Valores, Roles) acumulan ítems.
 
-Clave del diseño (decisión MVP): la **compuerta "sección completa" la decide el CÓDIGO**
-(`seccion_completa`: campos obligatorios no vacíos), no el criterio del LLM. El prompt de la
-entrevistadora conduce la charla; aquí solo capturamos y validamos lo dicho.
+Clave (decisión MVP): la **compuerta "sección completa" la decide el CÓDIGO** (`seccion_completa`),
+no el LLM. El prompt de la guía conduce la charla; aquí capturamos, validamos y damos por
+completa cada sección.
 """
 import asyncio
 import json
 
-from google import genai
 from google.genai import types
 from loguru import logger
 from sqlalchemy import text
 
-from .config import settings
 from .db import engine
+from .live_relay import _client  # Vertex AI (ADC) reutilizado: evita la cuota FREE-TIER del
+                                 # Developer API key, que se agota en pruebas (429 RESOURCE_EXHAUSTED).
 
-# Cliente Gemini (Developer API por API key), mismo patrón que persistence/embeddings.
-_client = genai.Client(api_key=settings.google_api_key)
-EXTRACT_MODEL = "gemini-2.5-flash"   # barato y suficiente para extracción estructurada
+EXTRACT_MODEL = "gemini-2.5-flash"
 
 
 # --------------------------------------------------------------------------- #
-# Secciones del Canva. `obligatorios` = campos que deben venir para dar la sección
-# por completa. `lista` = el campo es una lista y exige >= 1 elemento. `shape` = la
-# forma EXACTA del JSON que pedimos al extractor (para que las claves sean estables).
+# Secciones del Canva. `tipo`: "fijo" (apartados con nombre) | "lista" (ítems).
+# `apartados`: sub-campos a mostrar/rellenar. `obligatorios`: los que exige la
+# compuerta (fijo). `min_lista`: nº mínimo de ítems para dar por completa (lista).
+# `shape`: forma EXACTA del JSON que pedimos al extractor.
 # --------------------------------------------------------------------------- #
 SECCIONES = [
     {
-        "key": "vision", "titulo": "Visión", "obligatorios": ["vision"],
-        "descripcion": "La VISIÓN: lo que la persona quiere ser, hacer y tener (en ese orden); sus ideales y metas a largo plazo.",
-        "shape": '{"vision": "<texto, o cadena vacía si aún no lo ha dicho>"}',
+        "key": "presentacion", "titulo": "Presentación", "tipo": "fijo",
+        "apartados": [
+            {"campo": "nombre", "etiqueta": "Nombre"},
+            {"campo": "tiempo_disponible", "etiqueta": "Tiempo disponible"},
+        ],
+        "obligatorios": ["nombre"],
+        "descripcion": "Presentación: el NOMBRE de la persona y CUÁNTO TIEMPO tiene disponible ahora.",
+        "shape": '{"nombre": "<nombre o vacío>", "tiempo_disponible": "<p.ej. 20 minutos, o vacío>"}',
     },
     {
-        "key": "mision", "titulo": "Misión", "obligatorios": ["mision"],
-        "descripcion": "La MISIÓN: las acciones concretas para lograr la visión, ligadas a sus dones, talentos y a cómo sirve a otros.",
-        "shape": '{"mision": "<texto, o cadena vacía>"}',
+        "key": "vision", "titulo": "Visión", "tipo": "fijo",
+        "apartados": [
+            {"campo": "ser", "etiqueta": "Quiere SER"},
+            {"campo": "hacer", "etiqueta": "Quiere HACER"},
+            {"campo": "tener", "etiqueta": "Quiere TENER"},
+        ],
+        "obligatorios": ["ser", "hacer", "tener"],
+        "descripcion": "La VISIÓN desglosada en lo que la persona quiere SER, HACER y TENER (en ese orden).",
+        "shape": '{"ser": "<o vacío>", "hacer": "<o vacío>", "tener": "<o vacío>"}',
     },
     {
-        "key": "valores", "titulo": "Valores", "obligatorios": ["valores"], "lista": "valores",
-        "descripcion": "Los VALORES: principios que guían sus decisiones (hasta 5), cada uno con una breve explicación.",
-        "shape": '{"valores": [{"valor": "<nombre>", "explicacion": "<breve>"}]}  (lista vacía si aún no ha dicho ninguno)',
+        "key": "mision", "titulo": "Misión", "tipo": "fijo",
+        "apartados": [{"campo": "mision", "etiqueta": "Misión"}],
+        "obligatorios": ["mision"],
+        "descripcion": "La MISIÓN: las acciones para lograr la visión, ligadas a sus dones y talentos.",
+        "shape": '{"mision": "<o vacío>"}',
     },
     {
-        "key": "pilares", "titulo": "Pilares", "obligatorios": ["pilares"], "lista": "pilares",
-        "descripcion": "Los 4 PILARES de vida (espiritual, mental-emocional, físico, social): cómo se siente o qué dice de cada uno.",
-        "shape": '{"pilares": [{"area": "espiritual|mental|fisico|social", "nota": "<lo que dijo>"}]}  (lista vacía si aún nada)',
+        "key": "valores", "titulo": "Valores", "tipo": "lista", "lista": "valores", "min_lista": 3,
+        "apartados": [],
+        "descripcion": "Los VALORES: principios que guían sus decisiones (hasta 5), cada uno con breve explicación.",
+        "shape": '{"valores": [{"valor": "<nombre>", "explicacion": "<breve>"}]}  (lista vacía si aún nada)',
     },
     {
-        "key": "roles", "titulo": "Roles", "obligatorios": ["roles"], "lista": "roles",
+        "key": "pilares", "titulo": "Pilares", "tipo": "fijo",
+        "apartados": [
+            {"campo": "espiritual", "etiqueta": "Espiritual"},
+            {"campo": "mental", "etiqueta": "Mental-emocional"},
+            {"campo": "fisico", "etiqueta": "Físico"},
+            {"campo": "social", "etiqueta": "Social"},
+        ],
+        "obligatorios": ["espiritual", "mental", "fisico", "social"],
+        "descripcion": "Los 4 PILARES de vida: qué dice o cómo se siente en cada uno (espiritual, mental-emocional, físico, social).",
+        "shape": '{"espiritual": "<o vacío>", "mental": "<o vacío>", "fisico": "<o vacío>", "social": "<o vacío>"}',
+    },
+    {
+        "key": "roles", "titulo": "Roles", "tipo": "lista", "lista": "roles", "min_lista": 3,
+        "apartados": [],
         "descripcion": "Los ROLES más importantes de su vida (máx. 8), cada uno con el pilar al que pertenece.",
         "shape": '{"roles": [{"nombre": "<rol>", "pilar": "espiritual|mental|fisico|social"}]}  (lista vacía si aún nada)',
     },
     {
-        "key": "bloque", "titulo": "Primer bloque", "obligatorios": ["rol", "fecha_hora_iso"],
-        "descripcion": "El PRIMER BLOQUE de tiempo a agendar: para qué rol/objetivo, y el día y la hora acordados.",
-        "shape": '{"rol": "<rol/objetivo, o vacío>", "fecha_hora_iso": "<ISO 8601 con offset, p.ej. 2026-06-23T17:00:00+02:00, o vacío>"}',
+        "key": "bloque", "titulo": "Primer bloque", "tipo": "fijo",
+        "apartados": [
+            {"campo": "rol", "etiqueta": "Rol / objetivo"},
+            {"campo": "fecha_hora_iso", "etiqueta": "Día y hora"},
+        ],
+        "obligatorios": ["rol", "fecha_hora_iso"],
+        "descripcion": "El PRIMER BLOQUE a agendar: para qué rol/objetivo, y el día y la hora acordados.",
+        "shape": '{"rol": "<o vacío>", "fecha_hora_iso": "<ISO 8601 con offset, p.ej. 2026-06-23T17:00:00+02:00, o vacío>"}',
     },
 ]
 
@@ -67,22 +98,25 @@ SECCIONES_POR_KEY = {s["key"]: s for s in SECCIONES}
 
 
 def secciones_publicas() -> list[dict]:
-    """Lista ligera (key + título) para el stepper del frontend."""
-    return [{"key": s["key"], "titulo": s["titulo"]} for s in SECCIONES]
+    """Para el frontend: key, título, tipo, apartados y campo-lista de cada sección."""
+    return [
+        {"key": s["key"], "titulo": s["titulo"], "tipo": s.get("tipo", "fijo"),
+         "apartados": s.get("apartados", []), "lista": s.get("lista")}
+        for s in SECCIONES
+    ]
 
 
 def seccion_completa(seccion: dict, datos: dict | None) -> bool:
-    """True si todos los campos obligatorios de la sección están rellenos.
-    La COMPUERTA del flujo: la decide el código, no el LLM."""
+    """La COMPUERTA del flujo (la decide el código). Fijo: todos los obligatorios rellenos.
+    Lista: al menos `min_lista` ítems."""
     datos = datos or {}
+    if seccion.get("tipo") == "lista":
+        v = datos.get(seccion["lista"])
+        return isinstance(v, list) and len(v) >= seccion.get("min_lista", 1)
     for campo in seccion["obligatorios"]:
         v = datos.get(campo)
-        if seccion.get("lista") == campo:
-            if not isinstance(v, list) or len(v) == 0:
-                return False
-        else:
-            if not v or (isinstance(v, str) and not v.strip()):
-                return False
+        if not v or (isinstance(v, str) and not v.strip()):
+            return False
     return True
 
 
@@ -93,6 +127,44 @@ def primera_incompleta(canva: dict | None) -> int:
         if not seccion_completa(s, canva.get(s["key"])):
             return i
     return len(SECCIONES)
+
+
+def merge_seccion(seccion: dict, prev: dict | None, datos: dict | None) -> dict:
+    """Funde lo nuevo sobre lo previo SIN pisar con vacíos. En listas, se queda con la lista
+    más completa (la extracción devuelve la lista entera de la conversación acumulada)."""
+    prev = dict(prev or {})
+    datos = datos or {}
+    if seccion.get("tipo") == "lista":
+        campo = seccion["lista"]
+        nuevos = datos.get(campo)
+        if isinstance(nuevos, list) and len(nuevos) >= len(prev.get(campo) or []):
+            prev[campo] = nuevos
+        return prev
+    for k, v in datos.items():
+        if v not in (None, "", []):   # nunca borrar un dato ya capturado con un vacío
+            prev[k] = v
+    return prev
+
+
+def resumen_canva(canva: dict | None) -> str:
+    """Resumen breve de lo ya capturado (para inyectar al RETOMAR y que la guía no repita)."""
+    canva = canva or {}
+    lineas = []
+    for s in SECCIONES:
+        d = canva.get(s["key"]) or {}
+        if s.get("tipo") == "lista":
+            arr = d.get(s["lista"]) or []
+            items = ", ".join(
+                (x.get("valor") or x.get("nombre") or "") for x in arr if isinstance(x, dict)
+            ).strip(", ")
+            if items:
+                lineas.append(f"- {s['titulo']}: {items}")
+        else:
+            partes = [f"{a['etiqueta']}: {d.get(a['campo'])}"
+                      for a in s.get("apartados", []) if d.get(a["campo"])]
+            if partes:
+                lineas.append(f"- {s['titulo']}: " + "; ".join(partes))
+    return "\n".join(lineas)
 
 
 # --------------------------------------------------------------------------- #
@@ -109,13 +181,11 @@ CREATE TABLE IF NOT EXISTS canva_4g (
 
 
 async def crear_tablas_4g() -> None:
-    """Crea la tabla canva_4g (idempotente). Se llama en el startup de la app."""
     async with engine.begin() as conn:
         await conn.execute(text(_DDL))
 
 
 async def obtener_canva(user_id: str) -> dict:
-    """Canva guardado del usuario (dict por sección), o {} si no hay."""
     async with engine.connect() as conn:
         val = (
             await conn.execute(
@@ -128,7 +198,6 @@ async def obtener_canva(user_id: str) -> dict:
 
 
 async def guardar_canva(user_id: str, datos: dict, subject_id: str = "libro-4g") -> None:
-    """UPSERT del Canva del usuario."""
     async with engine.begin() as conn:
         await conn.execute(
             text(
@@ -141,6 +210,12 @@ async def guardar_canva(user_id: str, datos: dict, subject_id: str = "libro-4g")
         )
 
 
+async def borrar_canva(user_id: str) -> None:
+    """Borra el Canva de un usuario (reinicio para pruebas)."""
+    async with engine.begin() as conn:
+        await conn.execute(text("DELETE FROM canva_4g WHERE user_id = :u"), {"u": user_id})
+
+
 # --------------------------------------------------------------------------- #
 # Extracción por sección (Flash → JSON). Síncrono en hilo (no bloquea el loop).
 # --------------------------------------------------------------------------- #
@@ -148,8 +223,8 @@ def _extraer_sync(seccion_key: str, conversacion: str, fecha_ctx: str) -> dict:
     seccion = SECCIONES_POR_KEY[seccion_key]
     ctx_tiempo = (
         f"Contexto temporal: hoy es {fecha_ctx}. Para 'fecha_hora_iso' convierte la fecha y hora "
-        f"acordadas (aunque se digan de forma relativa, p.ej. 'el martes a las cinco') a ISO 8601 "
-        f"con offset de Europe/Madrid.\n"
+        f"acordadas (aunque se digan en relativo, p.ej. 'el martes a las cinco') a ISO 8601 con "
+        f"offset de Europe/Madrid.\n"
         if seccion_key == "bloque" else ""
     )
     prompt = (
@@ -177,7 +252,6 @@ def _extraer_sync(seccion_key: str, conversacion: str, fecha_ctx: str) -> dict:
 
 
 async def extraer_seccion(seccion_key: str, conversacion: str, fecha_ctx: str) -> dict:
-    """Extrae (en hilo) los campos de una sección a partir de la conversación. {} si falla."""
     try:
         return await asyncio.to_thread(_extraer_sync, seccion_key, conversacion, fecha_ctx)
     except Exception:

@@ -588,5 +588,28 @@ function wireAutosave() {
 $("backToAdmin").addEventListener("click", showAdmin);
 wireAutosave();
 
+// Deep-link: /call?svc=<ruta|nombre> abre directamente ese servicio en el editor
+// (lo usa el botón "Configuración" de /4g) y muestra un enlace fijo para VOLVER a /4g.
+function mostrarVolver4g() {
+  if (document.getElementById("volver4g")) return;
+  const a = document.createElement("a");
+  a.id = "volver4g"; a.href = "/4g"; a.textContent = "← Volver a Agenda 4G";
+  a.style.cssText = "position:fixed; top:10px; right:14px; z-index:1000; background:#172234;" +
+    "color:#e7e9ee; border:1px solid #2a3a55; border-radius:8px; padding:6px 12px;" +
+    "font-size:.85rem; text-decoration:none; font-family:system-ui,sans-serif;";
+  document.body.appendChild(a);
+}
+async function abrirServicioPorParam() {
+  const ruta = new URLSearchParams(location.search).get("svc");
+  if (!ruta) return;
+  mostrarVolver4g();
+  try {
+    const j = await (await fetch("/api/servicios")).json();
+    const svc = (j.servicios || []).find(
+      (s) => String(s.ruta) === String(ruta) || s.nombre === ruta);
+    if (svc) abrirServicio(svc);
+  } catch (e) { /* si falla, se queda en la cuadrícula */ }
+}
+
 // Arranque: cargar capacidades (para poder volcar configs) y luego la cuadrícula.
-loadDefaults().then(() => { loadHistory(); loadServicios(); });
+loadDefaults().then(() => { loadHistory(); loadServicios(); abrirServicioPorParam(); });

@@ -99,42 +99,39 @@ function chip(txt, sub) {
   if (sub) { const s = document.createElement("small"); s.textContent = " · " + sub; c.appendChild(s); }
   return c;
 }
-function renderSeccion(card, key, datos) {
-  const val = document.createElement("div");
+function renderSeccion(card, seccion, datos) {
   datos = datos || {};
-  const vacio = (msg) => { val.className = "empty"; val.textContent = msg; };
-  if (key === "vision") {
-    datos.vision ? (val.className = "val", val.textContent = datos.vision) : vacio("Aún por descubrir…");
-  } else if (key === "mision") {
-    datos.mision ? (val.className = "val", val.textContent = datos.mision) : vacio("Aún por descubrir…");
-  } else if (key === "valores") {
-    const arr = datos.valores || [];
-    if (!arr.length) vacio("Sin valores aún");
-    else arr.forEach((v) => val.appendChild(chip(v.valor || v, v.explicacion)));
-  } else if (key === "pilares") {
-    const arr = datos.pilares || [];
-    if (!arr.length) vacio("Sin pilares aún");
-    else arr.forEach((p) => val.appendChild(chip(p.area || p, p.nota)));
-  } else if (key === "roles") {
-    const arr = datos.roles || [];
-    if (!arr.length) vacio("Sin roles aún");
-    else arr.forEach((r) => val.appendChild(chip(r.nombre || r, r.pilar)));
-  } else if (key === "bloque") {
-    if (datos.rol || datos.fecha_hora_iso) {
-      val.className = "val";
-      val.textContent = (datos.rol || "—") + (datos.fecha_hora_iso ? "  ·  " + datos.fecha_hora_iso : "");
-    } else vacio("Sin bloque aún");
-    if (BOOKED) {
-      const b = document.createElement("div");
-      b.className = "booked" + (BOOKED.ok ? "" : " err");
-      if (BOOKED.ok && BOOKED.event) {
-        b.innerHTML = "✓ Agendado en tu Calendar — " +
-          (BOOKED.event.html_link ? '<a href="' + BOOKED.event.html_link + '" target="_blank">ver evento</a>' : "");
-      } else { b.textContent = "No se pudo agendar: " + (BOOKED.error || "error"); }
-      val.appendChild(b);
+  const wrap = document.createElement("div");
+  if (seccion.tipo === "lista") {
+    const arr = datos[seccion.lista] || [];
+    if (!arr.length) {
+      const e = document.createElement("div"); e.className = "empty";
+      e.textContent = "Aún nada — lo iremos añadiendo"; wrap.appendChild(e);
+    } else {
+      arr.forEach((it) => wrap.appendChild(chip(it.valor || it.nombre || it, it.explicacion || it.pilar)));
     }
+  } else {
+    (seccion.apartados || []).forEach((a) => {
+      const v = datos[a.campo];
+      const row = document.createElement("div");
+      row.className = "apart" + (v ? " done" : "");
+      const k = document.createElement("span"); k.className = "apart-k"; k.textContent = a.etiqueta;
+      const val = document.createElement("span"); val.className = "apart-v"; val.textContent = v ? v : "pendiente";
+      row.appendChild(k); row.appendChild(val);
+      wrap.appendChild(row);
+    });
   }
-  card.appendChild(val);
+  card.appendChild(wrap);
+  // Banner de agendado en la sección "Primer bloque".
+  if (seccion.key === "bloque" && BOOKED) {
+    const b = document.createElement("div");
+    b.className = "booked" + (BOOKED.ok ? "" : " err");
+    if (BOOKED.ok && BOOKED.event) {
+      b.innerHTML = "✓ Agendado en tu Calendar — " +
+        (BOOKED.event.html_link ? '<a href="' + BOOKED.event.html_link + '" target="_blank">ver evento</a>' : "");
+    } else { b.textContent = "No se pudo agendar: " + (BOOKED.error || "error"); }
+    card.appendChild(b);
+  }
 }
 function renderCanva() {
   const grid = $("grid"); grid.innerHTML = "";
@@ -143,7 +140,7 @@ function renderCanva() {
     card.className = "cv" + (i === ACTIVA ? " active" : "");
     const h = document.createElement("h3"); h.textContent = s.titulo;
     card.appendChild(h);
-    renderSeccion(card, s.key, CANVA[s.key]);
+    renderSeccion(card, s, CANVA[s.key]);
     grid.appendChild(card);
   });
 }
@@ -167,7 +164,7 @@ async function start() {
         if (j.type === "ready") {
           SECCIONES = j.secciones || []; ACTIVA = j.activa || 0; CANVA = j.canva || {}; BOOKED = null;
           renderStepper(); renderCanva();
-          setStatus("En marcha — di «hola» para empezar.");
+          setStatus("En marcha — Faro te saluda; escucha y responde cuando termine.");
           resolve();
         } else if (j.type === "error") { setStatus("Error: " + j.detail); reject(new Error(j.detail)); }
         else if (j.type === "interrupted") { flushPlayback(); curWho = null; }
@@ -194,6 +191,10 @@ async function start() {
   const silent = micCtx.createGain(); silent.gain.value = 0;
   micNode.onaudioprocess = (e) => {
     if (!ws || ws.readyState !== 1) return;
+    // Anti-eco: no enviar el micro mientras Faro está SONANDO (incluida la cola de
+    // reproducción, hasta `nextTime`), para que su propio audio por el altavoz no abra turno
+    // ni le interrumpa. `nextTime` es el instante en que termina lo que hay encolado.
+    if (playCtx && playCtx.currentTime < nextTime + 0.15) return;
     const ds = downsample(e.inputBuffer.getChannelData(0), micCtx.sampleRate, 16000);
     ws.send(toPCM16(ds));
   };
@@ -218,12 +219,29 @@ $("mic").addEventListener("click", async () => {
   try { await start(); } catch (e) { setStatus("Error: " + e); stop(); }
 });
 
-// Al cargar: muestra el Canva ya guardado (si hay) aunque no haya empezado a hablar.
+// Reiniciar desde cero (para pruebas): borra el Canva del usuario y sus citas de prueba.
+$("reset").addEventListener("click", async () => {
+  if (onCall) { setStatus("Termina la sesión antes de reiniciar."); return; }
+  if (!confirm("¿Reiniciar desde cero? Se borrará tu Canva y las citas de prueba de tu Calendar.")) return;
+  setStatus("Reiniciando…");
+  try {
+    const j = await (await fetch("/api/4g/reset", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: getUserId() }),
+    })).json();
+    CANVA = {}; ACTIVA = 0; BOOKED = null; curWho = null; curBubble = null; $("chat").innerHTML = "";
+    renderStepper(); renderCanva();
+    setStatus("Reiniciado desde cero" +
+      (j.eventos_borrados ? ` (${j.eventos_borrados} cita(s) borradas)` : "") + ". Pulsa «Empezar».");
+  } catch (e) { setStatus("No pude reiniciar: " + e); }
+});
+
+// Al cargar: muestra el Canva ya guardado (si hay) y la sección activa REAL del backend
+// (primera incompleta), no por mera existencia de la clave.
 (async () => {
   try {
     const j = await (await fetch("/api/4g/canva?user_id=" + encodeURIComponent(getUserId()))).json();
-    SECCIONES = j.secciones || []; CANVA = j.canva || {};
-    let i = 0; while (i < SECCIONES.length && CANVA[SECCIONES[i].key]) i++; // aprox. activa
-    ACTIVA = i; renderStepper(); renderCanva();
+    SECCIONES = j.secciones || []; CANVA = j.canva || {}; ACTIVA = j.activa || 0;
+    renderStepper(); renderCanva();
   } catch (e) { /* sin datos previos */ }
 })();

@@ -75,6 +75,46 @@ vacíos), **no** el criterio del LLM. Las preguntas literales salen de [[Entrevi
    determinista** de cada respuesta.
 4. **Cierre:** agendar el primer bloque con `agenda.py`.
 
+## Principios de diseño del onboarding (2026-06-19)
+- **Reproducir el método FIELMENTE** (mismo orden y criterios del libro); quitar solo la fricción
+  **MECÁNICA** (folio en blanco, escribir a mano, recordar, disciplina), **NO la reflexiva**. Los
+  20-40 min de reflexión (montar el Canva/Kairós) son **la sustancia**: se hacen *fluir*, no se comprimen.
+- **Paciencia con el silencio:** en secciones reflexivas (sobre todo Visión) tolerar e **invitar**
+  pausas largas (aflojar el fin-de-turno), sin rellenar el silencio; el agente *pregunta bien y espera bien*.
+- **Multimodal — Canva editable:** cada apartado se puede **hablar o escribir/retocar** → conserva la
+  afordancia del papel para quien reflexiona escribiendo (la voz quita el folio en blanco, no la escritura).
+- **Ritmo asíncrono:** pausar, pensarlo offline y **retomar** (resume ya soportado); ofrecer saltar una
+  pregunta difícil y volver.
+- **Avisos para insistir en completarlo (IDEA futura):** recordatorios (vía Google Calendar /
+  notificación) para retomar el onboarding si quedó a medias — encaja con el método ("reserva día y
+  hora"); nudge suave, no acoso. Recordar al USUARIO necesita el camino OAuth/notificación (futuro).
+
+## Rediseño a SESIÓN-POR-SECCIÓN (decidido 2026-06-19 — NO implementado aún)
+
+**Motivo (2 fallos concretos en pruebas):** (1) la persona monolítica (un prompt con los 6
+pasos) hizo que native-audio **recitara toda la Presentación de un tirón** (se presentó, pidió
+nombre, dio enhorabuena, explicó las 5 secciones y preguntó el tiempo en UN turno) en vez de
+pedir solo el nombre y esperar; (2) el prompt gigante **gasta ventana**.
+
+**Decisión:** pasar de **una** sesión Live continua a **una sesión Gemini por sección**, cosida
+por el backend detrás de **un único WebSocket con el navegador** (el audio del navegador NO se
+corta; solo cicla la sesión Gemini por debajo). *Reemplaza, para el onboarding, la decisión
+previa de "sesión única continua".*
+- **Prompt pequeño y enfocado por sección** ("estás en mitad de una conversación, NO saludes,
+  pide SOLO X, una pregunta, y espera la respuesta; nunca encadenes preguntas") → comportamiento
+  fiable + ventana mínima. El modelo no puede recitar lo que no conoce.
+- **Transiciones por el gating determinista:** sección completa (`seccion_completa`) → cerrar
+  esa sesión y abrir la de la siguiente.
+- **Memoria al cambiar de sección (ACOTADA):** inyectar en el prompt pequeño (a) el **resumen del
+  Canva** (memoria larga, `resumen_canva`) + (b) las **últimas 2-4 frases** del transcript
+  (memoria corta) → continuidad sin re-saludar, sin reventar la ventana.
+- **Transición visual en el centro:** al cerrar una sección, marcarla **completada (verde + ✓)**,
+  resaltar/expandir la siguiente y mostrar un breve *"preparando la siguiente parte…"* que
+  **enmascara la micro-pausa (~1-2 s)** de reconexión y da sensación de avance.
+- **No bloquea RAG:** el retrieval se inyecta por turno dentro de la sesión de cada sección.
+- **Trade-offs:** micro-pausa por sección (mitigada por la transición visual); cuidar el "no
+  saludar de nuevo".
+
 ## Mejoras de UX pendientes (anotado 2026-06-19 — NO ejecutado)
 - **Botón "⚙ Configuración" en `/4g`** → deep-link a **`/call?svc=4g`** que auto-abra el editor
   del servicio "4g". Permite tunear modelo / voz / persona-prompt / VAD del onboarding **sin salir**

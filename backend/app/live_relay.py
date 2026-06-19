@@ -366,6 +366,12 @@ async def _browser_to_gemini(ws: WebSocket, session, vad: dict, shared: dict):
 
             if not in_speech:
                 prefix.append(audio)
+                # Anti-eco (vías que lo pidan, p.ej. onboarding 4g): mientras el bot habla,
+                # ignorar el micro por completo (no abrir turno) para que su propio audio por el
+                # altavoz no le interrumpa. Desactiva el barge-in solo en esas vías.
+                if shared.get("no_barge") and shared.get("bot_speaking"):
+                    hot = 0
+                    continue
                 # Cortar al bot exige más evidencia (voz sostenida) que abrir en silencio.
                 need = barge_frames if shared.get("bot_speaking") else start_frames
                 hot = min(need, hot + 1) if peak >= open_peak else max(0, hot - 1)
