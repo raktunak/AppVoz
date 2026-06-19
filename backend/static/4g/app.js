@@ -103,6 +103,10 @@ function renderSeccion(card, seccion, datos) {
   datos = datos || {};
   const wrap = document.createElement("div");
   if (seccion.tipo === "lista") {
+    if (seccion.pregunta) {
+      const q = document.createElement("div"); q.className = "seccion-q"; q.textContent = seccion.pregunta;
+      wrap.appendChild(q);
+    }
     const arr = datos[seccion.lista] || [];
     if (!arr.length) {
       const e = document.createElement("div"); e.className = "empty";
@@ -115,9 +119,9 @@ function renderSeccion(card, seccion, datos) {
       const v = datos[a.campo];
       const row = document.createElement("div");
       row.className = "apart" + (v ? " done" : "");
-      const k = document.createElement("span"); k.className = "apart-k"; k.textContent = a.etiqueta;
-      const val = document.createElement("span"); val.className = "apart-v"; val.textContent = v ? v : "pendiente";
-      row.appendChild(k); row.appendChild(val);
+      const q = document.createElement("div"); q.className = "apart-q"; q.textContent = a.pregunta || a.etiqueta;
+      const val = document.createElement("div"); val.className = "apart-a"; val.textContent = v ? v : "pendiente";
+      row.appendChild(q); row.appendChild(val);
       wrap.appendChild(row);
     });
   }

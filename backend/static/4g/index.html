@@ -75,15 +75,14 @@
     .booked a { color: #9fe3b6; }
     .booked.err { background: #301717; border-color: #8a3a3a; color: #e9bfbf; }
     /* apartados (sub-campos que se rellenan y se ponen en verde en vivo) */
-    .apart { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0;
-      border-bottom: 1px solid var(--line); font-size: 14px; color: var(--muted); }
+    .apart { padding: 8px 0; border-bottom: 1px solid var(--line); }
     .apart:last-child { border-bottom: 0; }
-    .apart-k { flex: 0 0 auto; }
-    .apart-v { text-align: right; color: #5a6776; font-style: italic; }
-    .apart.done { color: var(--txt); }
-    .apart.done .apart-k { font-weight: 600; }
-    .apart.done .apart-k::before { content: "✓ "; color: var(--done); }
-    .apart.done .apart-v { color: #bfe9cf; font-style: normal; }
+    .apart-q { font-size: 13.5px; color: var(--muted); line-height: 1.35; }
+    .apart-a { font-size: 14.5px; color: #5a6776; font-style: italic; margin-top: 3px; }
+    .apart.done .apart-q { color: var(--txt); }
+    .apart.done .apart-q::before { content: "✓ "; color: var(--done); }
+    .apart.done .apart-a { color: #bfe9cf; font-style: normal; }
+    .seccion-q { font-size: 13.5px; color: var(--muted); line-height: 1.35; margin-bottom: 8px; }
 
     /* Transcripción abajo */
     aside {

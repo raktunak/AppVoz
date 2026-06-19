@@ -33,8 +33,8 @@ SECCIONES = [
     {
         "key": "presentacion", "titulo": "Presentación", "tipo": "fijo",
         "apartados": [
-            {"campo": "nombre", "etiqueta": "Nombre"},
-            {"campo": "tiempo_disponible", "etiqueta": "Tiempo disponible"},
+            {"campo": "nombre", "etiqueta": "Nombre", "pregunta": "¿Cómo te llamas?"},
+            {"campo": "tiempo_disponible", "etiqueta": "Tiempo disponible", "pregunta": "¿De cuánto tiempo dispones ahora?"},
         ],
         "obligatorios": ["nombre"],
         "descripcion": "Presentación: el NOMBRE de la persona y CUÁNTO TIEMPO tiene disponible ahora.",
@@ -43,9 +43,9 @@ SECCIONES = [
     {
         "key": "vision", "titulo": "Visión", "tipo": "fijo",
         "apartados": [
-            {"campo": "ser", "etiqueta": "Quiere SER"},
-            {"campo": "hacer", "etiqueta": "Quiere HACER"},
-            {"campo": "tener", "etiqueta": "Quiere TENER"},
+            {"campo": "ser", "etiqueta": "Quiere SER", "pregunta": "Si te quedaran tres meses de vida, ¿qué querrías SER?"},
+            {"campo": "hacer", "etiqueta": "Quiere HACER", "pregunta": "¿Qué querrías HACER?"},
+            {"campo": "tener", "etiqueta": "Quiere TENER", "pregunta": "¿Qué querrías TENER?"},
         ],
         "obligatorios": ["ser", "hacer", "tener"],
         "descripcion": "La VISIÓN desglosada en lo que la persona quiere SER, HACER y TENER (en ese orden).",
@@ -53,24 +53,24 @@ SECCIONES = [
     },
     {
         "key": "mision", "titulo": "Misión", "tipo": "fijo",
-        "apartados": [{"campo": "mision", "etiqueta": "Misión"}],
+        "apartados": [{"campo": "mision", "etiqueta": "Misión", "pregunta": "¿Qué acciones, ligadas a tus dones y talentos, te llevarían a esa visión?"}],
         "obligatorios": ["mision"],
         "descripcion": "La MISIÓN: las acciones para lograr la visión, ligadas a sus dones y talentos.",
         "shape": '{"mision": "<o vacío>"}',
     },
     {
         "key": "valores", "titulo": "Valores", "tipo": "lista", "lista": "valores", "min_lista": 3,
-        "apartados": [],
+        "apartados": [], "pregunta": "¿Qué principios guían tus decisiones? Dime al menos tres, cada uno con una breve explicación.",
         "descripcion": "Los VALORES: principios que guían sus decisiones (hasta 5), cada uno con breve explicación.",
         "shape": '{"valores": [{"valor": "<nombre>", "explicacion": "<breve>"}]}  (lista vacía si aún nada)',
     },
     {
         "key": "pilares", "titulo": "Pilares", "tipo": "fijo",
         "apartados": [
-            {"campo": "espiritual", "etiqueta": "Espiritual"},
-            {"campo": "mental", "etiqueta": "Mental-emocional"},
-            {"campo": "fisico", "etiqueta": "Físico"},
-            {"campo": "social", "etiqueta": "Social"},
+            {"campo": "espiritual", "etiqueta": "Espiritual", "pregunta": "¿Cómo te sientes en tu pilar espiritual?"},
+            {"campo": "mental", "etiqueta": "Mental-emocional", "pregunta": "¿Y en el mental-emocional?"},
+            {"campo": "fisico", "etiqueta": "Físico", "pregunta": "¿Y en el físico?"},
+            {"campo": "social", "etiqueta": "Social", "pregunta": "¿Y en el social?"},
         ],
         "obligatorios": ["espiritual", "mental", "fisico", "social"],
         "descripcion": "Los 4 PILARES de vida: qué dice o cómo se siente en cada uno (espiritual, mental-emocional, físico, social).",
@@ -78,15 +78,15 @@ SECCIONES = [
     },
     {
         "key": "roles", "titulo": "Roles", "tipo": "lista", "lista": "roles", "min_lista": 3,
-        "apartados": [],
+        "apartados": [], "pregunta": "¿Cuáles son los papeles más importantes de tu vida? (máximo 8, cada uno con su área).",
         "descripcion": "Los ROLES más importantes de su vida (máx. 8), cada uno con el pilar al que pertenece.",
         "shape": '{"roles": [{"nombre": "<rol>", "pilar": "espiritual|mental|fisico|social"}]}  (lista vacía si aún nada)',
     },
     {
         "key": "bloque", "titulo": "Primer bloque", "tipo": "fijo",
         "apartados": [
-            {"campo": "rol", "etiqueta": "Rol / objetivo"},
-            {"campo": "fecha_hora_iso", "etiqueta": "Día y hora"},
+            {"campo": "rol", "etiqueta": "Rol / objetivo", "pregunta": "¿Para qué rol u objetivo quieres reservar tu primer bloque?"},
+            {"campo": "fecha_hora_iso", "etiqueta": "Día y hora", "pregunta": "¿Qué día y a qué hora te viene bien?"},
         ],
         "obligatorios": ["rol", "fecha_hora_iso"],
         "descripcion": "El PRIMER BLOQUE a agendar: para qué rol/objetivo, y el día y la hora acordados.",
@@ -101,7 +101,8 @@ def secciones_publicas() -> list[dict]:
     """Para el frontend: key, título, tipo, apartados y campo-lista de cada sección."""
     return [
         {"key": s["key"], "titulo": s["titulo"], "tipo": s.get("tipo", "fijo"),
-         "apartados": s.get("apartados", []), "lista": s.get("lista")}
+         "apartados": s.get("apartados", []), "lista": s.get("lista"),
+         "pregunta": s.get("pregunta")}
         for s in SECCIONES
     ]
 
