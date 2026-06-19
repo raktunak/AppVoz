@@ -115,6 +115,25 @@ previa de "sesión única continua".*
 - **Trade-offs:** micro-pausa por sección (mitigada por la transición visual); cuidar el "no
   saludar de nuevo".
 
+## Granularidad FINA: inyección FRASE A FRASE (pregunta a pregunta) — anotado 2026-06-19
+
+Extensión del rediseño "por sección" a **por pregunta/apartado**. **Motivo:** las preguntas son
+las del **MÉTODO** (literales, del libro); si Faro las **reformula** puede acabar preguntando *otra
+cosa distinta* → rompe la fidelidad. **Faro NO debe cambiar las preguntas.**
+- El backend inyecta, una a una, la **pregunta EXACTA** que toca (las que ya están en `canva4g`
+  por apartado / en [[Entrevista-4G-Preguntas-Literales]]) y ordena: *"haz ESTA pregunta
+  literalmente, sin reformular ni inventar otra; solo gestiona la respuesta"*.
+- Avanza a la siguiente pregunta cuando el apartado se **captura y confirma** (gating ya existente,
+  ahora a nivel **apartado**, no solo sección).
+- Encaja con que la **pantalla ya muestra la pregunta literal** (hecho) → lo que se ve y lo que se
+  oye **coinciden**.
+- **Reto honesto:** native-audio **genera** habla, tiende a reformular aunque le des el literal; si
+  no lo respeta, la vía **100% fiel** es **sacar la pregunta del LLM** (mostrarla/leerla con una voz
+  determinista y que el modelo solo recoja la respuesta) → cambio mayor a valorar.
+- Tensión a resolver: **fidelidad literal** vs. **naturalidad/flexibilidad** (que Faro se adapte si
+  el usuario se desvía). Probable equilibrio: pregunta literal fija + libertad solo en los apoyos
+  ("tómate tu tiempo", reformular la *respuesta*, no la pregunta).
+
 ## Mejoras de UX pendientes (anotado 2026-06-19 — NO ejecutado)
 - **Botón "⚙ Configuración" en `/4g`** → deep-link a **`/call?svc=4g`** que auto-abra el editor
   del servicio "4g". Permite tunear modelo / voz / persona-prompt / VAD del onboarding **sin salir**
@@ -125,5 +144,47 @@ previa de "sesión única continua".*
   de la clave** en el Canva (una visión vacía sale con ✓), no por `seccion_completa` real. Usar la
   lógica de completitud real al pintar el stepper inicial.
 
+## Decisión de arquitectura de DATOS (2026-06-19) — qué va a RAG y qué no
+
+Cierra un debate recurrente. **Tres capas de datos, cada una en su sitio:**
+
+1. **Conocimiento del método → RAG (semántica).** Las 3 colecciones de
+   [[Colecciones-Semanticas-4G]] (`metodo-4g`, `formacion-4g`, `qa-4g`): texto grande,
+   canónico y compartido. Es lo único que justifica vectores. Aporta valor **después** del
+   MVP, en la fase de **formación/coaching** (enseñar y resolver dudas anclado al libro), no
+   en la captura del onboarding.
+2. **Estado + perfil del usuario → ESTRUCTURADO (relacional), leído e inyectado. NO a RAG.**
+   - **El Canva** (`canva_4g`: PEP, pilares, roles, bloques) **no se vectoriza**: es
+     estructurado, quieres el **estado ACTUAL exacto**, es mutable y de volumen mínimo (cabe
+     entero en el prompt). Vectorizarlo introduciría **contradicción/staleness** (versión vieja
+     y nueva ambas recuperables) y obligaría a **re-embeber en cada corrección**.
+   - **El perfil del usuario** (tono, forma de pensar, **temperamento**) tampoco va a RAG,
+     **por las mismas razones**. Es además **parte del método**: el libro pide diagnosticar el
+     perfil temperamental (Guerrero/Planificador/Director/Zen → Ambivertido) para **adaptar
+     coaching y recordatorios**. Se guarda como **campo estructurado** (perfil) + **texto corto
+     destilado** (estilo/registro/qué le motiva) en la memoria del usuario, y se **inyecta** en
+     el system prompt.
+   - **Cómo se *aprende* el perfil:** extender [resumir_sesion](../backend/app/persistence.py)
+     para que, además de `{resumen, temas, dudas}`, destile una **dimensión de
+     estilo/temperamento** desde los `turnos` crudos (que **ya** se guardan, relacionales). El
+     log crudo es la materia prima; **no necesita vectores**.
+   - Esto **resuelve el hueco "la memoria no entra al prompt"** sin construir un pipeline de
+     vectores: basta **leer el estado estructurado e inyectarlo**.
+3. **Narrativa larga del usuario → vectores, pero MÁS ADELANTE.** Solo si el agente debe
+   **recordar/citar momentos concretos** de un historial demasiado grande para inyectar entero
+   ("la última vez dijiste…") — y aun así con **episodios curados + fecha + supersedencia**, no
+   turnos crudos. Fuera del alcance actual.
+
+**Botón "hablar" por sección = forma UI de la sesión-por-sección.** Pulsar "hablar" en un
+apartado abre una sesión Gemini **acotada a esa sección** con su **valor actual inyectado**
+(*"ya tienes «…», ¿quieres corregirlo o ampliarlo?"*); la extracción determinista + el gating
+re-evalúan la completitud. Unifica **onboarding y edición/ampliación** en el mismo mecanismo.
+
+**El prompt por sección se COMPONE de 3 capas** (no se "genera"): (a) **esqueleto estático**
+(persona + regla: *"no saludes, haz ESTA pregunta literalmente sin reformular, una sola, y
+espera"*); (b) **la(s) pregunta(s) literal(es)** ya escritas (`canva4g` / [[Entrevista-4G-Preguntas-Literales]]);
+(c) **estado dinámico**: valor ya capturado en la sección + resumen del Canva + últimas 2-4 frases.
+
 Fuentes: [[MVP-Demo-Muestra-de-Fuerza]], [[Entrevista-4G-Preguntas-Literales]],
+[[Colecciones-Semanticas-4G]],
 repo `c:\AppVoz` (`agenda.py`, `live_relay.py`, `persistence.py`).

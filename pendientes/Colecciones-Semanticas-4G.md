@@ -33,7 +33,10 @@
    coaching (*"llevas 3 semanas aplazando 'salud'"*). No es corpus de materia, es su historial.
 
 **Fuera de RAG → a Postgres (estado estructurado):** PEP, pilares, roles, objetivos T.A.R.G.E.T.,
-bloques, progreso y métricas. *Principio: el LLM no calcula; la BD calcula, el LLM interpreta y redacta.*
+bloques, progreso y métricas — y también el **perfil del usuario** (temperamento Guerrero/Planificador/
+Director/Zen, tono y forma de pensar): se **lee e inyecta**, no se vectoriza (estructurado, mutable, lo
+quieres ACTUAL y entero; vectorizarlo da contradicción/staleness). *Principio: el LLM no calcula; la BD
+calcula, el LLM interpreta y redacta.* Decisión ampliada en `MVP-Onboarding-Voz-Canva.md` §Arquitectura de DATOS.
 
 ## Notas / invariantes
 - **La que aporta Fabián es la (2) `formacion-4g`** — encaja con "una nos la tenía que dar él".
