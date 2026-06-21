@@ -234,11 +234,17 @@ def _build_config(cfg: dict) -> tuple[str, types.LiveConnectConfig]:
     if caps["language"].get("configurable") and lang and lang in caps["language"].get("codes", []):
         speech_kwargs["language_code"] = lang
 
+    # STT de ENTRADA: si el cfg fija idioma (p.ej. el onboarding 4g: 'es-ES'), forzarlo para que la
+    # transcripción del micro no salte de idioma; si no, automático (el panel multi-idioma).
+    stt_lang = cfg.get("stt_language")
+    input_tx = (types.AudioTranscriptionConfig(language_codes=[stt_lang]) if stt_lang
+                else types.AudioTranscriptionConfig())
+
     kwargs = dict(
         response_modalities=["AUDIO"],
         system_instruction=system,
         speech_config=types.SpeechConfig(**speech_kwargs),
-        input_audio_transcription=types.AudioTranscriptionConfig(),
+        input_audio_transcription=input_tx,
         output_audio_transcription=types.AudioTranscriptionConfig(),
         # VAD automático de Gemini DESACTIVADO (no dispara fiable): señalizamos el turno nosotros
         realtime_input_config=types.RealtimeInputConfig(

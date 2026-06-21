@@ -10,7 +10,9 @@ no el LLM. El prompt de la guía conduce la charla; aquí capturamos, validamos 
 completa cada sección.
 """
 import asyncio
+import io
 import json
+import wave
 
 from google.genai import types
 from loguru import logger
@@ -36,7 +38,7 @@ SECCIONES = [
             {"campo": "nombre", "etiqueta": "Nombre", "pregunta": "¿Cómo te llamas?"},
             {"campo": "tiempo_disponible", "etiqueta": "Tiempo disponible", "pregunta": "¿De cuánto tiempo dispones ahora?"},
         ],
-        "obligatorios": ["nombre"],
+        "obligatorios": ["nombre", "tiempo_disponible"],
         "descripcion": "Presentación: el NOMBRE de la persona y CUÁNTO TIEMPO tiene disponible ahora.",
         "shape": '{"nombre": "<nombre o vacío>", "tiempo_disponible": "<p.ej. 20 minutos, o vacío>"}',
     },
@@ -107,6 +109,16 @@ def secciones_publicas() -> list[dict]:
     ]
 
 
+def preguntas_seccion(seccion: dict) -> list[str]:
+    """Preguntas LITERALES de una sección, en el orden del método. 'fijo': la `pregunta` de
+    cada apartado; 'lista': la `pregunta` de la sección. Lista vacía si no hay ninguna.
+    Es la fuente que el backend inyecta a la guía para que pregunte VERBATIM (sin reformular)."""
+    if seccion.get("tipo") == "lista":
+        p = seccion.get("pregunta")
+        return [p] if p else []
+    return [a["pregunta"] for a in seccion.get("apartados", []) if a.get("pregunta")]
+
+
 def seccion_completa(seccion: dict, datos: dict | None) -> bool:
     """La COMPUERTA del flujo (la decide el código). Fijo: todos los obligatorios rellenos.
     Lista: al menos `min_lista` ítems."""
@@ -128,6 +140,13 @@ def primera_incompleta(canva: dict | None) -> int:
         if not seccion_completa(s, canva.get(s["key"])):
             return i
     return len(SECCIONES)
+
+
+def completas(canva: dict | None) -> list[str]:
+    """Keys de las secciones ya completas (para que el frontend pinte ✓ sin asumir orden lineal:
+    en sesión-por-sección el usuario puede rellenarlas en cualquier orden)."""
+    canva = canva or {}
+    return [s["key"] for s in SECCIONES if seccion_completa(s, canva.get(s["key"]))]
 
 
 def merge_seccion(seccion: dict, prev: dict | None, datos: dict | None) -> dict:
@@ -220,7 +239,7 @@ async def borrar_canva(user_id: str) -> None:
 # --------------------------------------------------------------------------- #
 # Extracción por sección (Flash → JSON). Síncrono en hilo (no bloquea el loop).
 # --------------------------------------------------------------------------- #
-def _extraer_sync(seccion_key: str, conversacion: str, fecha_ctx: str) -> dict:
+def _extraer_sync(seccion_key: str, conversacion: str, fecha_ctx: str, stt_fiable: str = "") -> dict:
     seccion = SECCIONES_POR_KEY[seccion_key]
     ctx_tiempo = (
         f"Contexto temporal: hoy es {fecha_ctx}. Para 'fecha_hora_iso' convierte la fecha y hora "
@@ -228,16 +247,26 @@ def _extraer_sync(seccion_key: str, conversacion: str, fecha_ctx: str) -> dict:
         f"offset de Europe/Madrid.\n"
         if seccion_key == "bloque" else ""
     )
+    fiable = (
+        f"TRANSCRIPCIÓN FIABLE (STT en español) de la ÚLTIMA intervención de la PERSONA: «{stt_fiable}»\n\n"
+        if stt_fiable else ""
+    )
     prompt = (
         "Eres un extractor de datos. De la siguiente conversación entre una GUÍA y una PERSONA, "
         "extrae ÚNICAMENTE los datos de esta sección del Canva 4G y devuelve EXCLUSIVAMENTE un JSON válido.\n\n"
         f"SECCIÓN: {seccion['titulo']} — {seccion['descripcion']}\n"
         f"FORMA EXACTA del JSON a devolver: {seccion['shape']}\n\n"
         "REGLAS:\n"
-        "- Extrae solo lo que la PERSONA haya dicho CLARAMENTE. No inventes ni completes tú.\n"
+        "- La transcripción de la PERSONA dentro de CONVERSACIÓN puede venir MAL (otro idioma o "
+        "palabras equivocadas). Por orden de FIABILIDAD usa: (1) la TRANSCRIPCIÓN FIABLE de arriba "
+        "si existe; (2) lo que la GUÍA CONFIRMA de forma explícita (p. ej. 'he entendido que te "
+        "llamas Jose y dispones de 20 minutos'); y en último lugar el texto crudo de la PERSONA.\n"
+        "- Extrae solo datos dichos CLARAMENTE; no inventes ni completes.\n"
         "- Si un campo aún no se ha dicho, déjalo como cadena vacía (o lista vacía).\n"
+        "- Si un nombre propio viniera en otro alfabeto, pásalo a alfabeto LATINO del español.\n"
         "- Devuelve solo el JSON, sin texto alrededor.\n"
         f"{ctx_tiempo}\n"
+        f"{fiable}"
         f"CONVERSACIÓN:\n{conversacion}\n"
     )
     resp = _client.models.generate_content(
@@ -252,9 +281,88 @@ def _extraer_sync(seccion_key: str, conversacion: str, fecha_ctx: str) -> dict:
         return {}
 
 
-async def extraer_seccion(seccion_key: str, conversacion: str, fecha_ctx: str) -> dict:
+async def extraer_seccion(seccion_key: str, conversacion: str, fecha_ctx: str, stt_fiable: str = "") -> dict:
     try:
-        return await asyncio.to_thread(_extraer_sync, seccion_key, conversacion, fecha_ctx)
+        return await asyncio.to_thread(_extraer_sync, seccion_key, conversacion, fecha_ctx, stt_fiable)
     except Exception:
         logger.exception(f"[4g] extraer_seccion '{seccion_key}' falló")
         return {}
+
+
+# --------------------------------------------------------------------------- #
+# STT FIABLE de respaldo (solución C): transcribe el audio de un turno con Gemini forzando español,
+# para no depender de la transcripción poco fiable de native-audio (idioma/contenido erróneos).
+# --------------------------------------------------------------------------- #
+def _pcm_to_wav(pcm: bytes, rate: int = 16000) -> bytes:
+    """Envuelve PCM16 mono en un contenedor WAV (Gemini no acepta PCM crudo, sí WAV)."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def _stt_sync(pcm: bytes) -> str:
+    resp = _client.models.generate_content(
+        model=EXTRACT_MODEL,
+        contents=[
+            types.Part.from_bytes(data=_pcm_to_wav(pcm), mime_type="audio/wav"),
+            "Transcribe literalmente, en ESPAÑOL, lo que dice la persona. Devuelve solo el texto, "
+            "sin comillas ni comentarios.",
+        ],
+    )
+    return (resp.text or "").strip()
+
+
+async def transcribir_audio(pcm: bytes) -> str:
+    """STT fiable (Gemini, español) del audio de un turno; '' si no hay audio o falla."""
+    if not pcm:
+        return ""
+    try:
+        return await asyncio.to_thread(_stt_sync, pcm)
+    except Exception:
+        logger.exception("[4g] transcribir_audio falló")
+        return ""
+
+
+# --------------------------------------------------------------------------- #
+# Clasificador de intención: cuando la guía recapitula y pregunta "¿seguimos?", saber si la
+# PERSONA confirma, corrige un dato, lo rechaza o es ambiguo. Determinista (Flash → JSON).
+# --------------------------------------------------------------------------- #
+_INTENT_PROMPT = (
+    "En esta conversación, la GUÍA acaba de recapitular los datos de la PERSONA y le ha preguntado "
+    "si están correctos y si quiere continuar a la siguiente parte. Clasifica la intención de la "
+    "ÚLTIMA intervención de la PERSONA y devuelve EXCLUSIVAMENTE un JSON {\"intencion\": \"...\"} con "
+    "uno de estos valores:\n"
+    "- \"confirma\": acepta seguir (sí, vale, correcto, adelante, continúa, perfecto).\n"
+    "- \"corrige\": cambia o corrige algún dato (p. ej. 'no, me llamo Jose', 'son 30 minutos').\n"
+    "- \"rechaza\": no quiere seguir todavía (no, espera, aún no, déjalo).\n"
+    "- \"ambiguo\": no se entiende o no responde a eso.\n\n"
+    "Conversación reciente:\n"
+)
+
+
+def _intencion_sync(texto: str) -> str:
+    resp = _client.models.generate_content(
+        model=EXTRACT_MODEL,
+        contents=_INTENT_PROMPT + texto,
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    try:
+        return (json.loads(resp.text) or {}).get("intencion") or "ambiguo"
+    except Exception:
+        logger.warning(f"[4g] intención: JSON no parseable: {resp.text[:120]}")
+        return "ambiguo"
+
+
+async def clasificar_intencion(texto: str) -> str:
+    """confirma | corrige | rechaza | ambiguo, sobre la respuesta del usuario a la confirmación."""
+    if not texto.strip():
+        return "ambiguo"
+    try:
+        return await asyncio.to_thread(_intencion_sync, texto)
+    except Exception:
+        logger.exception("[4g] clasificar_intencion falló")
+        return "ambiguo"

@@ -89,7 +89,18 @@ vacíos), **no** el criterio del LLM. Las preguntas literales salen de [[Entrevi
   notificación) para retomar el onboarding si quedó a medias — encaja con el método ("reserva día y
   hora"); nudge suave, no acoso. Recordar al USUARIO necesita el camino OAuth/notificación (futuro).
 
-## Rediseño a SESIÓN-POR-SECCIÓN (decidido 2026-06-19 — NO implementado aún)
+## Rediseño a SESIÓN-POR-SECCIÓN (decidido 2026-06-19 — **IMPLEMENTADO 2026-06-20**)
+
+> **Estado (2026-06-20):** implementado en `onboarding_4g.py` (backend) + `static/4g/` (frontend).
+> Cada sección es una **sesión Gemini independiente** que el usuario abre/cierra con su botón
+> «🎙 Hablar» (auto-cierra la anterior). UN solo WebSocket + un solo micro; por debajo se cicla
+> la sesión. El **control loop** del WS es el único que lee del socket y despacha el audio (VAD
+> por-frame, `_Vad`) a la sesión activa; cada sección corre en su tarea (`_run_section`).
+> Continuidad por inyección del **resumen del Canva** en el prompt de cada sección (no ventana
+> gigante). Guion **literal** por sección, con modo **revisión** (corregir/ampliar) al reabrir una
+> ya completa. Sin micro-pausas: la transición coincide con la acción del usuario. Pendiente:
+> prueba en vivo + ajuste del guion si native-audio reformula; vía 100% fiel (lectura
+> determinista) como escalada. Protocolo WS nuevo documentado en el docstring de `onboarding_4g.py`.
 
 **Motivo (2 fallos concretos en pruebas):** (1) la persona monolítica (un prompt con los 6
 pasos) hizo que native-audio **recitara toda la Presentación de un tirón** (se presentó, pidió

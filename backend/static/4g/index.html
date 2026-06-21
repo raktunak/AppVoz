@@ -62,7 +62,16 @@
       min-height: 96px;
     }
     .cv.active { border-color: var(--accent2); box-shadow: 0 0 0 1px var(--accent2) inset; }
-    .cv h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+    .cv.done { border-color: var(--done); }
+    .cv-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+    .cv h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+    .cv.done h3::after { content: " ✓"; color: var(--done); }
+    /* botón "Hablar" por sección (abre/cierra su conversación de voz) */
+    .hablar { border: 0; border-radius: 999px; padding: 6px 13px; font-size: 12.5px; font-weight: 600;
+      cursor: pointer; background: var(--accent2); color: #04121f; white-space: nowrap; flex: 0 0 auto; }
+    .hablar.on { background: #d9694a; color: #2a0d06; }
+    .hablar.rev { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+    .hablar.rev:hover { color: var(--txt); border-color: var(--accent2); }
     .cv .val { font-size: 15px; line-height: 1.5; white-space: pre-wrap; }
     .cv .empty { color: #5a6776; font-style: italic; font-size: 14px; }
     .chip {
@@ -83,6 +92,12 @@
     .apart.done .apart-q::before { content: "✓ "; color: var(--done); }
     .apart.done .apart-a { color: #bfe9cf; font-style: normal; }
     .seccion-q { font-size: 13.5px; color: var(--muted); line-height: 1.35; margin-bottom: 8px; }
+    /* desplegable de pruebas: prompt inyectado a Faro por sección */
+    .promptbox { margin-top: 10px; }
+    .promptbox summary { cursor: pointer; font-size: 12px; color: var(--muted); user-select: none; list-style: none; }
+    .promptbox summary:hover { color: var(--accent2); }
+    .promptbox pre { white-space: pre-wrap; font-size: 11.5px; line-height: 1.45; color: #9fb0c0;
+      background: #11181f; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; margin: 7px 0 0; }
 
     /* Transcripción abajo */
     aside {
@@ -101,10 +116,9 @@
   <header>
     <h1>Agenda 4G <span class="sub">· tu vida en un Canva</span></h1>
     <div class="grow"></div>
-    <span id="status">Pulsa «Empezar» y espera — Faro te saluda.</span>
+    <span id="status">Conectando…</span>
     <button id="reset" class="reset" title="Borra tu Canva y tus citas de prueba — empezar de cero">↺ Reiniciar</button>
     <a class="cfg" href="/call?svc=4g" title="Configuración del servicio 4g (modelo, voz, persona, VAD)">⚙ Configuración</a>
-    <button id="mic" class="mic">🎙 Empezar</button>
   </header>
   <main>
     <nav id="stepper"></nav>
