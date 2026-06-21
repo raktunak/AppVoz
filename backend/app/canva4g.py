@@ -109,16 +109,6 @@ def secciones_publicas() -> list[dict]:
     ]
 
 
-def preguntas_seccion(seccion: dict) -> list[str]:
-    """Preguntas LITERALES de una sección, en el orden del método. 'fijo': la `pregunta` de
-    cada apartado; 'lista': la `pregunta` de la sección. Lista vacía si no hay ninguna.
-    Es la fuente que el backend inyecta a la guía para que pregunte VERBATIM (sin reformular)."""
-    if seccion.get("tipo") == "lista":
-        p = seccion.get("pregunta")
-        return [p] if p else []
-    return [a["pregunta"] for a in seccion.get("apartados", []) if a.get("pregunta")]
-
-
 def seccion_completa(seccion: dict, datos: dict | None) -> bool:
     """La COMPUERTA del flujo (la decide el código). Fijo: todos los obligatorios rellenos.
     Lista: al menos `min_lista` ítems."""
@@ -143,8 +133,8 @@ def primera_incompleta(canva: dict | None) -> int:
 
 
 def completas(canva: dict | None) -> list[str]:
-    """Keys de las secciones ya completas (para que el frontend pinte ✓ sin asumir orden lineal:
-    en sesión-por-sección el usuario puede rellenarlas en cualquier orden)."""
+    """Keys de las secciones ya completas (para que el frontend marque ✓ cada bloque por sus DATOS,
+    no por un índice lineal: con botón por bloque el usuario puede rellenarlas en cualquier orden)."""
     canva = canva or {}
     return [s["key"] for s in SECCIONES if seccion_completa(s, canva.get(s["key"]))]
 
@@ -260,7 +250,7 @@ def _extraer_sync(seccion_key: str, conversacion: str, fecha_ctx: str, stt_fiabl
         "- La transcripción de la PERSONA dentro de CONVERSACIÓN puede venir MAL (otro idioma o "
         "palabras equivocadas). Por orden de FIABILIDAD usa: (1) la TRANSCRIPCIÓN FIABLE de arriba "
         "si existe; (2) lo que la GUÍA CONFIRMA de forma explícita (p. ej. 'he entendido que te "
-        "llamas Jose y dispones de 20 minutos'); y en último lugar el texto crudo de la PERSONA.\n"
+        "llamas Jose'); y en último lugar el texto crudo de la PERSONA.\n"
         "- Extrae solo datos dichos CLARAMENTE; no inventes ni completes.\n"
         "- Si un campo aún no se ha dicho, déjalo como cadena vacía (o lista vacía).\n"
         "- Si un nombre propio viniera en otro alfabeto, pásalo a alfabeto LATINO del español.\n"
@@ -290,8 +280,8 @@ async def extraer_seccion(seccion_key: str, conversacion: str, fecha_ctx: str, s
 
 
 # --------------------------------------------------------------------------- #
-# STT FIABLE de respaldo (solución C): transcribe el audio de un turno con Gemini forzando español,
-# para no depender de la transcripción poco fiable de native-audio (idioma/contenido erróneos).
+# STT FIABLE de respaldo: re-transcribe el audio del último turno con Gemini forzando ESPAÑOL, para
+# no depender de la transcripción de native-audio (que confunde nombres: 'José'→'Suchen'/'Rosa').
 # --------------------------------------------------------------------------- #
 def _pcm_to_wav(pcm: bytes, rate: int = 16000) -> bytes:
     """Envuelve PCM16 mono en un contenedor WAV (Gemini no acepta PCM crudo, sí WAV)."""
@@ -325,44 +315,3 @@ async def transcribir_audio(pcm: bytes) -> str:
     except Exception:
         logger.exception("[4g] transcribir_audio falló")
         return ""
-
-
-# --------------------------------------------------------------------------- #
-# Clasificador de intención: cuando la guía recapitula y pregunta "¿seguimos?", saber si la
-# PERSONA confirma, corrige un dato, lo rechaza o es ambiguo. Determinista (Flash → JSON).
-# --------------------------------------------------------------------------- #
-_INTENT_PROMPT = (
-    "En esta conversación, la GUÍA acaba de recapitular los datos de la PERSONA y le ha preguntado "
-    "si están correctos y si quiere continuar a la siguiente parte. Clasifica la intención de la "
-    "ÚLTIMA intervención de la PERSONA y devuelve EXCLUSIVAMENTE un JSON {\"intencion\": \"...\"} con "
-    "uno de estos valores:\n"
-    "- \"confirma\": acepta seguir (sí, vale, correcto, adelante, continúa, perfecto).\n"
-    "- \"corrige\": cambia o corrige algún dato (p. ej. 'no, me llamo Jose', 'son 30 minutos').\n"
-    "- \"rechaza\": no quiere seguir todavía (no, espera, aún no, déjalo).\n"
-    "- \"ambiguo\": no se entiende o no responde a eso.\n\n"
-    "Conversación reciente:\n"
-)
-
-
-def _intencion_sync(texto: str) -> str:
-    resp = _client.models.generate_content(
-        model=EXTRACT_MODEL,
-        contents=_INTENT_PROMPT + texto,
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
-    )
-    try:
-        return (json.loads(resp.text) or {}).get("intencion") or "ambiguo"
-    except Exception:
-        logger.warning(f"[4g] intención: JSON no parseable: {resp.text[:120]}")
-        return "ambiguo"
-
-
-async def clasificar_intencion(texto: str) -> str:
-    """confirma | corrige | rechaza | ambiguo, sobre la respuesta del usuario a la confirmación."""
-    if not texto.strip():
-        return "ambiguo"
-    try:
-        return await asyncio.to_thread(_intencion_sync, texto)
-    except Exception:
-        logger.exception("[4g] clasificar_intencion falló")
-        return "ambiguo"

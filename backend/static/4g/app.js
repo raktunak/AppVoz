@@ -1,13 +1,12 @@
-// Cliente del onboarding 4G — SESIÓN-POR-SECCIÓN: cada apartado del Canva es una conversación
-// que el usuario abre/cierra con su botón "Hablar". Un solo WS + un solo micro; por debajo el
-// backend cicla la sesión Gemini. mic → PCM16 16k → /ws/4g; recibe audio 24k + Canva en vivo.
+// Cliente del onboarding 4G: mic → PCM16 16k → WS /ws/4g; recibe audio (24k) + Canva en vivo.
+// AGENTES POR BLOQUE sobre UNA sola sesión: cada apartado tiene su botón «▶ Empezar»; al pulsarlo,
+// ese 'agente' (con la memoria de lo anterior) coge el testigo → manda {type:'goto', idx} y el backend
+// le inyecta su rol en la MISMA línea de audio (la voz no se toca).
 const $ = (id) => document.getElementById(id);
 let ws, micCtx, micStream, micNode, playCtx, nextTime = 0, sources = [];
-let connected = false, micOn = false;
-let SECCIONES = [], CANVA = {}, BOOKED = null;
-let ACTIVE = -1;            // índice de la sección abierta (-1 = ninguna)
-let DONE = new Set();       // keys de secciones completas
-let curWho = null, curBubble = null, lastUserBubble = null;
+let connected = false, micActivo = false;
+let SECCIONES = [], ACTIVA = -1, CANVA = {}, BOOKED = null, DONE = new Set();
+let curWho = null, curBubble = null;
 
 // ---- identidad persistente (misma clave que el panel /call) ----
 function newId() {
@@ -77,26 +76,25 @@ function addChunk(who, text) {
     const b = document.createElement("div"); b.className = "body";
     curBubble.appendChild(w); curBubble.appendChild(b);
     $("chat").appendChild(curBubble); curWho = who;
-    if (who === "user") lastUserBubble = curBubble;
   }
   curBubble.querySelector(".body").textContent =
     (curBubble.querySelector(".body").textContent + " " + text).trim();
   $("chat").scrollTop = $("chat").scrollHeight;
 }
 
-// ---- stepper (izquierda) ----
+// ---- stepper (izquierda) — done por DATOS (DONE), clic = iniciar ese bloque ----
 function renderStepper() {
   const nav = $("stepper"); nav.innerHTML = "";
   SECCIONES.forEach((s, i) => {
-    const done = DONE.has(s.key), active = i === ACTIVE;
+    const done = DONE.has(s.key);
     const el = document.createElement("div");
-    el.className = "step" + (done ? " done" : "") + (active ? " active" : "");
+    el.className = "step" + (done ? " done" : "") + (i === ACTIVA && !done ? " active" : "");
     el.style.cursor = "pointer";
+    el.onclick = () => iniciarBloque(i);
     const dot = document.createElement("div");
     dot.className = "dot"; dot.textContent = done ? "✓" : (i + 1);
     const lbl = document.createElement("div"); lbl.textContent = s.titulo;
     el.appendChild(dot); el.appendChild(lbl);
-    el.onclick = () => startSection(i);   // saltar a una sección desde el stepper
     nav.appendChild(el);
   });
 }
@@ -135,7 +133,6 @@ function renderSeccion(card, seccion, datos) {
     });
   }
   card.appendChild(wrap);
-  // Banner de agendado en la sección "Primer bloque".
   if (seccion.key === "bloque" && BOOKED) {
     const b = document.createElement("div");
     b.className = "booked" + (BOOKED.ok ? "" : " err");
@@ -146,113 +143,72 @@ function renderSeccion(card, seccion, datos) {
     card.appendChild(b);
   }
 }
-function botonSeccion(i, key) {
-  const btn = document.createElement("button");
-  if (i === ACTIVE) {
-    btn.className = "hablar on"; btn.textContent = "■ Terminar";
-    btn.onclick = (e) => { e.stopPropagation(); stopSection(); };
-  } else if (DONE.has(key)) {
-    btn.className = "hablar rev"; btn.textContent = "✏ Revisar";
-    btn.onclick = (e) => { e.stopPropagation(); startSection(i); };
-  } else {
-    btn.className = "hablar"; btn.textContent = "🎙 Hablar";
-    btn.onclick = (e) => { e.stopPropagation(); startSection(i); };
-  }
-  return btn;
-}
 function renderCanva() {
   const grid = $("grid"); grid.innerHTML = "";
   SECCIONES.forEach((s, i) => {
+    const done = DONE.has(s.key);
+    const enCurso = (i === ACTIVA && !done);   // 'done' manda: un bloque completo NO sigue «En curso»
     const card = document.createElement("div");
-    card.className = "cv" + (i === ACTIVE ? " active" : "") + (DONE.has(s.key) ? " done" : "");
+    card.className = "cv" + (enCurso ? " active" : "") + (done ? " done" : "");
     const head = document.createElement("div"); head.className = "cv-head";
     const h = document.createElement("h3"); h.textContent = s.titulo;
-    head.appendChild(h); head.appendChild(botonSeccion(i, s.key));
+    const btn = document.createElement("button");
+    btn.className = "go" + (done ? " is-done" : (enCurso ? " on" : ""));
+    btn.textContent = done ? "✓ Repasar" : (enCurso ? "● En curso" : "▶ Empezar");
+    btn.onclick = () => iniciarBloque(i);
+    head.appendChild(h); head.appendChild(btn);
     card.appendChild(head);
     renderSeccion(card, s, CANVA[s.key]);
-    // Desplegable de pruebas: el prompt que se le inyecta a Faro en esta sección.
-    if (s.prompt_seccion) {
-      const det = document.createElement("details"); det.className = "promptbox";
-      const sum = document.createElement("summary"); sum.textContent = "🔧 Prompt de Faro";
-      const pre = document.createElement("pre");
-      pre.textContent = "— CONDUCCIÓN DE SECCIÓN —\n" + s.prompt_seccion +
-        "\n\n— INVITACIÓN A SEGUIR —\n" + (s.prompt_confirmacion || "");
-      det.appendChild(sum); det.appendChild(pre); card.appendChild(det);
-    }
     grid.appendChild(card);
   });
 }
 
 // ---- WebSocket ----
-let connectPromise = null;   // memoiza la conexión en curso: evita abrir dos WS a la vez
-function connect() {
-  if (connectPromise) return connectPromise;
-  connectPromise = new Promise((resolve, reject) => {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${proto}://${location.host}/ws/4g`);
-    ws.binaryType = "arraybuffer";
-    let settled = false;
-    ws.onopen = () => { ws.send(JSON.stringify({ type: "config", user_id: getUserId() })); };
-    ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") {
-        const j = JSON.parse(ev.data);
-        if (j.type === "ready" && !settled) { settled = true; handleMsg(j); resolve(); }
-        else handleMsg(j);
-      } else {
-        playChunk(new Int16Array(ev.data));
-      }
-    };
-    ws.onerror = () => { setStatus("Error de conexión."); if (!settled) { settled = true; connectPromise = null; reject(new Error("ws")); } };
-    ws.onclose = () => {
-      connected = false; ACTIVE = -1; connectPromise = null; renderStepper(); renderCanva();
-      setStatus("Desconectado. Recarga para continuar.");
-    };
-  });
-  return connectPromise;
-}
-
-function tituloDe(i) { return SECCIONES[i] ? SECCIONES[i].titulo : ""; }
-
-function handleMsg(j) {
+function handleMsg(j, resolve) {
   switch (j.type) {
     case "ready":
-      SECCIONES = j.secciones || []; CANVA = j.canva || {}; DONE = new Set(j.completas || []);
-      connected = true; renderStepper(); renderCanva();
-      setStatus("Listo. Pulsa «🎙 Hablar» en una sección para empezar.");
+      SECCIONES = j.secciones || []; CANVA = j.canva || {}; BOOKED = null;
+      DONE = new Set(j.completas || []); connected = true;
+      renderStepper(); renderCanva();
+      setStatus("Conectado. Pulsa «▶ Empezar» en un apartado.");
+      if (resolve) resolve();
       break;
-    case "section_started":
-      ACTIVE = j.idx; renderStepper(); renderCanva();
-      setStatus("Hablando: «" + (SECCIONES[j.idx] ? SECCIONES[j.idx].titulo : "") + "» — escucha a Faro y responde.");
+    case "canva":
+      CANVA = j.canva || CANVA; if (j.completas) DONE = new Set(j.completas);
+      renderStepper(); renderCanva(); break;
+    case "cerrado": {   // bloque completo: Faro ya invitó → dejamos de escuchar y queda ✓ (se cierra solo)
+      micActivo = false; ACTIVA = -1; renderStepper(); renderCanva();
+      const sec = SECCIONES.find((s) => s.key === j.key);
+      setStatus("✓ «" + (sec ? sec.titulo : "Apartado") + "» lista. Pulsa otro apartado cuando quieras.");
       break;
-    case "section_stopped":
-      if (ACTIVE === j.idx) ACTIVE = -1;
-      flushPlayback(); renderStepper(); renderCanva(); curWho = null; curBubble = null;
-      break;
-    case "section_done":   // el bloque queda completo (✓); el avance al siguiente lo decide el usuario
-      DONE.add(j.key); renderStepper(); renderCanva();
-      if (DONE.size >= SECCIONES.length) setStatus("✓ ¡Onboarding completo! Tu Canva está listo.");
-      else setStatus("✓ «" + tituloDe(j.idx) + "» lista — pulsa el siguiente bloque cuando quieras.");
-      break;
-    case "canva": CANVA = j.canva || CANVA; renderCanva(); break;
-    case "booked": BOOKED = j; renderCanva(); break;
+    }
     case "user": addChunk("user", j.text); break;
-    case "user_fix":   // corrige la última burbuja del usuario con el STT fiable (es-ES)
-      if (lastUserBubble) lastUserBubble.querySelector(".body").textContent = j.text;
-      break;
     case "bot": addChunk("bot", j.text); break;
     case "interrupted": flushPlayback(); curWho = null; break;
+    case "booked": BOOKED = j; renderCanva(); break;
     case "error": setStatus("Error: " + (j.detail || "")); break;
   }
 }
 
-// ---- micrófono (perezoso: se pide en el primer "Hablar"; luego emite en continuo) ----
-async function ensureMic() {
-  if (micOn) return;
+async function connect() {
   ensurePlay();
-  // AGC desactivado a propósito: el control automático de ganancia mueve el nivel del audio y
-  // desestabiliza el umbral de energía fijo del VAD (la calibración deja de ser fiable).
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws/4g`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { ws.send(JSON.stringify({ type: "config", user_id: getUserId() })); };
+  const ready = new Promise((resolve, reject) => {
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === "string") { handleMsg(JSON.parse(ev.data), resolve); }
+      else { playChunk(new Int16Array(ev.data)); }
+    };
+    ws.onerror = () => { setStatus("Error de conexión."); reject(new Error("ws error")); };
+  });
+  ws.onclose = () => { connected = false; micActivo = false; ACTIVA = -1; renderStepper(); renderCanva(); };
+  await ready;
+
+  // micrófono continuo: el VAD del backend decide el turno (este bloque es el que daba la voz fina).
   micStream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
   micCtx = new (window.AudioContext || window.webkitAudioContext)();
   const src = micCtx.createMediaStreamSource(micStream);
@@ -260,52 +216,63 @@ async function ensureMic() {
   const silent = micCtx.createGain(); silent.gain.value = 0;
   micNode.onaudioprocess = (e) => {
     if (!ws || ws.readyState !== 1) return;
-    // Anti-eco: no enviar el micro mientras Faro está SONANDO (cola hasta nextTime), para que su
-    // propio audio por el altavoz no abra turno ni le interrumpa. El margen tras acabar es PEQUEÑO
-    // (~60ms) para no comerse el arranque de una respuesta rápida ("sí"/"no") justo tras el recap;
-    // el eco residual lo cubre el echoCancellation del micro (ensureMic) + el gate de servidor.
-    if (playCtx && playCtx.currentTime < nextTime + 0.06) return;
+    if (!micActivo) return;   // bloque cerrado: no escuchar hasta que el usuario abra otro apartado
+    // Anti-eco: no enviar el micro mientras Faro está SONANDO (cola hasta nextTime).
+    if (playCtx && playCtx.currentTime < nextTime + 0.15) return;
     const ds = downsample(e.inputBuffer.getChannelData(0), micCtx.sampleRate, 16000);
     ws.send(toPCM16(ds));
   };
   src.connect(micNode); micNode.connect(silent); silent.connect(micCtx.destination);
-  micOn = true;
 }
 
-// ---- secciones ----
-async function startSection(idx) {
-  if (!connected) { try { await connect(); } catch (e) { setStatus("No pude conectar al servidor."); return; } }
-  try { await ensureMic(); } catch (e) { setStatus("Necesito permiso de micrófono para hablar."); return; }
-  curWho = null; curBubble = null;   // la conversación se ACUMULA entre secciones (solo Reiniciar la borra)
-  flushPlayback();
-  ws.send(JSON.stringify({ type: "start_section", idx }));
-  setStatus("Abriendo «" + (SECCIONES[idx] ? SECCIONES[idx].titulo : "") + "»…");
-}
-function stopSection() {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop_section" }));
-}
-
-// ---- reiniciar (pruebas): borra el Canva del usuario y sus citas de prueba ----
-$("reset").addEventListener("click", async () => {
-  if (!confirm("¿Reiniciar desde cero? Se borrará tu Canva y las citas de prueba de tu Calendar.")) return;
-  // Cierra la sección activa si la hubiera (para no dejar a Faro hablando tras el reinicio).
-  if (ACTIVE >= 0) { stopSection(); ACTIVE = -1; }
-  // Limpia la UI YA (conversación + Canva), sin esperar al backend ni depender del estado.
-  CANVA = {}; DONE = new Set(); BOOKED = null; curWho = null; curBubble = null; $("chat").innerHTML = "";
+// Inicio MANUAL de un bloque: conecta si hace falta y manda goto → el agente de ese bloque toma el testigo.
+async function iniciarBloque(idx) {
+  if (!connected) {
+    setStatus("Conectando…");
+    try { await connect(); } catch (e) { setStatus("No pude conectar: " + e); stop(); return; }
+  }
+  if (!ws || ws.readyState !== 1) { setStatus("Conexión no lista; pulsa de nuevo."); return; }
+  ws.send(JSON.stringify({ type: "goto", idx }));
+  micActivo = true; ACTIVA = idx; curWho = null; curBubble = null;
   renderStepper(); renderCanva();
+  setStatus("Hablando con el agente de «" + (SECCIONES[idx] ? SECCIONES[idx].titulo : "") + "» — escucha y responde.");
+}
+
+function stop() {
+  connected = false; micActivo = false;
+  try { micNode && micNode.disconnect(); } catch (e) {}
+  try { micStream && micStream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+  try { micCtx && micCtx.close(); } catch (e) {}
+  try { ws && ws.close(); } catch (e) {}
+  flushPlayback();
+  micNode = micStream = micCtx = null; ws = null; ACTIVA = -1;
+  renderStepper(); renderCanva();
+  setStatus("Sesión finalizada. Tu Canva queda guardado.");
+}
+
+// Reiniciar desde cero (para pruebas): borra el Canva del usuario y sus citas de prueba.
+$("reset").addEventListener("click", async () => {
+  if (connected) { setStatus("Termina la sesión antes de reiniciar."); return; }
+  if (!confirm("¿Reiniciar desde cero? Se borrará tu Canva y las citas de prueba de tu Calendar.")) return;
   setStatus("Reiniciando…");
   try {
     const j = await (await fetch("/api/4g/reset", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: getUserId() }),
     })).json();
-    setStatus("Reiniciado desde cero" +
-      (j.eventos_borrados ? ` (${j.eventos_borrados} cita(s) borradas)` : "") + ". Pulsa «🎙 Hablar».");
-  } catch (e) { setStatus("Pantalla limpiada; el borrado en el servidor falló: " + e); }
+    CANVA = {}; ACTIVA = -1; DONE = new Set(); BOOKED = null; curWho = null; curBubble = null; $("chat").innerHTML = "";
+    renderStepper(); renderCanva();
+    setStatus("Reiniciado" + (j.eventos_borrados ? ` (${j.eventos_borrados} cita(s) borradas)` : "") +
+      ". Pulsa «▶ Empezar» en un apartado.");
+  } catch (e) { setStatus("No pude reiniciar: " + e); }
 });
 
-// ---- arranque: conecta el WS al cargar (NO abre Gemini hasta pulsar «Hablar») ----
+// Al cargar: muestra el Canva ya guardado (si hay) y qué bloques están completos (✓).
 (async () => {
-  setStatus("Conectando…");
-  try { await connect(); } catch (e) { setStatus("No pude conectar al servidor."); }
+  try {
+    const j = await (await fetch("/api/4g/canva?user_id=" + encodeURIComponent(getUserId()))).json();
+    SECCIONES = j.secciones || []; CANVA = j.canva || {}; DONE = new Set(j.completas || []); ACTIVA = -1;
+    renderStepper(); renderCanva();
+    setStatus("Pulsa «▶ Empezar» en un apartado para que su agente te atienda.");
+  } catch (e) { /* sin datos previos */ }
 })();

@@ -1,46 +1,23 @@
-"""Vertical ONBOARDING 4G: la guía por voz que rellena el Canva en vivo, SECCIÓN A SECCIÓN.
+"""Vertical ONBOARDING 4G: la entrevistadora por voz que rellena el Canva en vivo.
 
 Navegador (PCM 16k) ⇄ FastAPI /ws/4g ⇄ Gemini Live (Vertex). Reutiliza del relay web
-(`live_relay.py`) el cliente Gemini, `_build_config`, las constantes/clamps de VAD y `_vad_params`.
+(`live_relay.py`) el cliente Gemini, `_build_config`, el VAD por energía y la subida de
+audio (`_browser_to_gemini`). Lo NUEVO aquí: tras cada turno completo, extraemos con Flash
+los campos de la SECCIÓN activa del Canva (`canva4g`), los empujamos al navegador para que el
+stepper se rellene en directo, y avanzamos de sección cuando el código la da por completa.
+Al cerrar la última sección ("Primer bloque"), se agenda en Google Calendar (`agenda.py`),
+de forma DETERMINISTA (no dependemos del tool-calling nativo del modelo).
 
-Lo NUEVO (decisión 2026-06-20): cada SECCIÓN del Canva es una **sesión Gemini independiente**
-(ventana pequeña, conversación reseteada) que el usuario abre/cierra desde su botón "Hablar"; el
-navegador mantiene UN solo WebSocket y un solo micro, y por debajo ciclamos la sesión Gemini. Así
-ganamos: fidelidad (prompt enfocado + preguntas literales inyectadas), ventana limpia (sin arrastrar
-30 min de conversación), coste/latencia y un modelo mental de CURSO. La continuidad entre secciones
-se da inyectando el RESUMEN del Canva (estado estructurado) en el prompt de cada sección, no
-manteniendo una ventana gigante.
-
-Arquitectura del WS:
-- El **control loop** (`ws_4g`) es el ÚNICO que lee del WebSocket: despacha cada frame de audio a
-  la sesión activa (vía `_Vad.feed`) y procesa los mensajes de control del navegador.
-- Cada sección corre en su propia tarea (`_run_section`) con su `async with live.connect(...)`.
-- Iniciar una sección **cierra automáticamente** la anterior (`_iniciar_seccion` → `_detener_seccion`).
-
-La compuerta "sección completa" la decide el CÓDIGO (`canva4g.seccion_completa`, con confirmación
-por estabilidad). Al completar "Primer bloque" se agenda en Google Calendar de forma DETERMINISTA.
-
-Protocolo navegador→backend (JSON salvo el audio binario PCM16 16k):
-  config        {user_id}                              · handshake (no arranca ninguna sección)
-  start_section {idx}                                  · abre/reabre la sección idx (cierra la activa)
-  stop_section  {}                                     · cierra la sección activa
-  vad           {threshold,end_silence,barge_frames}   · ajuste de VAD en vivo
-
-Protocolo backend→navegador (JSON salvo el audio binario PCM 24k):
-  ready          {secciones, activa, canva, completas}
-  section_started{idx, key}     · se abrió una sección (Faro va a hablar)
-  section_stopped{idx, key}     · se cerró la sección activa
-  user/bot       {text}         · transcripción en streaming
-  canva          {canva}        · estado del Canva tras cada extracción
-  section_done   {idx, key}     · la sección quedó completa (el usuario decide seguir/revisar)
-  booked         {ok, event|error}
-  interrupted    {}             · barge-in (vaciar reproducción)
+Protocolo hacia el navegador (JSON salvo el audio, que va binario PCM 24k):
+  ready    {secciones, activa, canva}    · al conectar
+  user/bot {text}                        · transcripción en streaming
+  canva    {canva}                       · estado completo del Canva tras cada extracción
+  section  {activa}                      · cambió la sección activa
+  booked   {ok, event|error}             · resultado de agendar el primer bloque
+  interrupted {}                         · barge-in (vaciar reproducción)
 """
-import array
 import asyncio
-import collections
 import json
-import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -50,42 +27,23 @@ from loguru import logger
 
 from . import agenda, canva4g, persistence
 from .config import settings
-from .live_relay import (
-    BARGE_MAX,
-    _build_config,
-    _clamp_barge,
-    _clamp_open,
-    _clamp_silence,
-    _client,
-    _vad_from_open,
-    _vad_params,
-)
+from .live_relay import _browser_to_gemini, _build_config, _client, _vad_params
 
 router = APIRouter()
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 
-# Registro de sesiones WS activas por user_id. Lo usa /api/4g/reset para limpiar el Canva EN
-# MEMORIA de una sesión viva: si no, al desconectar el WS re-guardaría el Canva viejo y desharía
-# el reset (la fila se borra en la BD pero la copia en memoria la vuelve a escribir al cerrar).
-_SESIONES_4G: dict[str, dict] = {}
 
-
-def _parse_minutos(texto) -> int | None:
-    """Minutos disponibles a partir de texto libre ('20 minutos', '5 minutillos', 'media hora',
-    'una hora'); None si no se puede. Modula la invitación a avanzar (>15 min)."""
-    if not texto:
-        return None
-    t = str(texto).lower()
-    m = re.search(r"\d+", t)
-    if m:
-        n = int(m.group())
-        return n * 60 if "hora" in t else n
-    if "media hora" in t:
-        return 30
-    if "hora" in t:
-        return 60
-    return None
+def _firma_oblig(seccion: dict, datos: dict | None):
+    """Firma de los campos obligatorios de una sección, para detectar ESTABILIDAD entre turnos
+    (avanzar solo cuando el dato se repite → evita avanzar con el ruido del primer turno)."""
+    datos = datos or {}
+    if seccion.get("tipo") == "lista":
+        return len(datos.get(seccion["lista"]) or [])
+    return tuple(
+        (datos.get(c) or "").strip() if isinstance(datos.get(c), str) else datos.get(c)
+        for c in seccion["obligatorios"]
+    )
 
 
 async def _cargar_cfg_4g() -> tuple[dict, str]:
@@ -106,304 +64,168 @@ def _fecha_ctx() -> str:
     return f"{DIAS[ahora.weekday()]} {ahora.strftime('%d/%m/%Y %H:%M')} ({settings.agenda_timezone})"
 
 
-def _preparar_prompt(cfg: dict, fecha_str: str, canva: dict) -> dict:
-    """Base del system_instruction de una sección: persona + (a) fecha de hoy, (b) reglas de
-    operación, (c) resumen del Canva ya capturado (continuidad). La conducción concreta de la
-    sección (las preguntas) la añade `_instruccion_seccion`; aquí va lo común a todas."""
+def _preparar_prompt(cfg: dict, fecha_str: str, canva_prev: dict) -> dict:
+    """Añade al system_instruction la fecha de hoy (el modelo no la sabe) y, si la persona ya
+    empezó, un resumen del Canva para que la guía RETOME con naturalidad sin repetir."""
     base = (cfg.get("system_instruction") or "").strip()
     extra = (
         f"\n\nContexto: hoy es {fecha_str}. Cuando propongas o confirmes un día y una hora, "
         f"resuélvelos a partir de esta fecha y confírmalos en voz alta antes de cerrar."
-        "\n\nCÓMO TRABAJAS: sigue al pie de la letra las instrucciones de esta conversación. Haz "
-        "las preguntas que se te indican de forma LITERAL, palabra por palabra, una sola por turno, "
-        "y espera la respuesta. NUNCA leas en voz alta el texto entre paréntesis ( ) ni entre "
-        "corchetes [ ]: son indicaciones para ti, no para decirlas. No narres lo que hace la persona."
     )
-    resumen = canva4g.resumen_canva(canva)
+    resumen = canva4g.resumen_canva(canva_prev)
     if resumen:
         extra += (
-            "\n\nLO QUE ESTA PERSONA YA TE HA CONTADO (para dar continuidad; NO lo repreguntes):\n"
-            + resumen
+            "\n\nESTA PERSONA YA EMPEZÓ EN UNA SESIÓN ANTERIOR. Salúdala de nuevo con calidez, "
+            "NO repitas lo ya hecho y retoma por lo que falta. Ya tiene capturado:\n" + resumen
         )
-    out = {**cfg, "system_instruction": base + extra}
-    # 4g: conducción guiada y DETERMINISTA — temperatura baja para que Faro improvise menos, no
-    # invente datos y no se adelante de apartado (si el panel ya fija una, se respeta).
-    if out.get("temperature") in (None, ""):
-        out["temperature"] = 0.3
-    return out
+    return {**cfg, "system_instruction": base + extra}
 
 
-def _valores_seccion(seccion: dict, datos: dict | None) -> str:
-    """Texto legible con lo ya capturado en una sección (para el guion de revisión)."""
-    datos = datos or {}
+def _guion_agente(seccion: dict) -> str:
+    """Las preguntas LITERALES de un bloque, para inyectar el guion del 'agente' de esa fase."""
     if seccion.get("tipo") == "lista":
-        arr = datos.get(seccion["lista"]) or []
-        return "; ".join(
-            (x.get("valor") or x.get("nombre") or "") for x in arr if isinstance(x, dict)
-        ).strip("; ")
-    return "; ".join(
-        f"{a['etiqueta']}: {datos.get(a['campo'])}"
-        for a in seccion.get("apartados", []) if datos.get(a["campo"])
-    )
+        return f"«{seccion.get('pregunta', '')}»"
+    return "  ".join(f"«{a['pregunta']}»" for a in seccion.get("apartados", []) if a.get("pregunta"))
 
 
-def _instruccion_seccion(seccion: dict, arranque: bool, reanuda: bool, datos: dict) -> str:
-    """Bloque de conducción de la sección que va al SYSTEM_INSTRUCTION (NO se vocaliza): saludo según
-    el momento + las preguntas literales a hacer (captura) o el resumen para corregir (revisión).
-    Al ir en el prompt de sistema y no en el canal hablado, Faro las SIGUE en vez de leerlas."""
-    if arranque and not reanuda:
-        saludo = "Es el comienzo: preséntate en una sola frase como Faro."
-    elif arranque and reanuda:
-        saludo = "Retomas una sesión anterior: salúdala de nuevo en una frase, sin repetir lo ya hecho."
+async def _inyectar_agente(session, shared: dict, idx: int) -> None:
+    """RELEVO DE ROL en la MISMA sesión (sin reconectar → la voz NO se toca): convierte a Faro en el
+    'agente' del bloque `idx`, pasándole la memoria de lo ya capturado (resumen) y SOLO las preguntas
+    de esa fase. Es 'un agente nuevo coge el testigo', pero dentro de una sola línea de audio."""
+    if session is None or not (0 <= idx < len(canva4g.SECCIONES)):
+        return
+    seccion = canva4g.SECCIONES[idx]
+    guion = _guion_agente(seccion)
+    resumen = canva4g.resumen_canva(shared.get("canva"))
+    if not shared.get("presentado"):
+        apertura = "Es el COMIENZO: preséntate en UNA sola frase como Faro, la guía."
+        shared["presentado"] = True
     else:
-        saludo = "Vienes de la parte anterior: NO te presentes ni saludes de nuevo; enlaza con naturalidad."
-    if canva4g.seccion_completa(seccion, datos):   # revisión
-        vals = _valores_seccion(seccion, datos)
-        return (
-            f"AHORA estás en la parte «{seccion['titulo']}», que YA está rellena con: {vals}. "
-            f"{saludo} Resúmela en una frase y pregúntale si quiere CORREGIR o AMPLIAR algo; "
-            f"no la interrogues de cero ni repitas las preguntas."
-        )
-    preguntas = canva4g.preguntas_seccion(seccion)
-    lista = "  ".join(f"{i + 1}) «{q}»" for i, q in enumerate(preguntas))
-    return (
-        f"AHORA estás en la parte «{seccion['titulo']}». {saludo} Haz estas preguntas, UNA A UNA y "
-        f"TAL CUAL (palabra por palabra, sin reformular ni inventar otras, sin adelantar las "
-        f"siguientes), esperando la respuesta a cada una antes de la próxima: {lista} "
-        f"Consigue una respuesta REAL a CADA pregunta: si la persona responde otra cosa (p. ej. te "
-        f"da su nombre cuando preguntas por el tiempo) o no la contesta, vuelve a hacer ESA MISMA "
-        f"pregunta; NUNCA des por bueno ni te INVENTES un dato que no haya dicho con claridad. "
-        f"Acoge cada respuesta con naturalidad pero NO la confirmes con '¿correcto?' ni encadenes "
-        f"otra pregunta sin esperar. No empieces, no menciones ni te adelantes al apartado SIGUIENTE "
-        f"bajo ninguna circunstancia. Cuando tengas TODAS las respuestas, ESPERA mi indicación para "
-        f"recapitular y proponer seguir; no recapitules ni propongas avanzar por tu cuenta."
-    )
-
-
-async def _disparar(session, shared: dict) -> None:
-    """Da el turno inicial a Faro con un mínimo ENTRE PARÉNTESIS (la persona tiene la regla de no
-    leer paréntesis), para que arranque siguiendo su system_instruction sin vocalizar la indicación."""
+        apertura = "Enlaza con naturalidad, SIN volver a presentarte ni saludar de nuevo."
+    partes = [f"(Ahora céntrate SOLO en la fase «{seccion['titulo']}». {apertura}"]
+    if resumen:
+        partes.append(f"Para dar continuidad (NO lo repreguntes), la persona YA te ha contado: {resumen}.")
+    partes.append(
+        f"Haz estas preguntas, una a una y TAL CUAL (palabra por palabra), esperando respuesta a cada "
+        f"una antes de la siguiente: {guion}")
+    partes.append("Cuando tengas TODAS esas respuestas, NO sigas con otra fase ni preguntes más: "
+                  "invita a la persona a pulsar el siguiente apartado cuando quiera, y espera.)")
     shared["bot_speaking"] = True
     try:
         await session.send_client_content(
-            turns=[types.Content(role="user", parts=[types.Part(text="(Empieza tu turno ahora.)")])],
+            turns=[types.Content(role="user", parts=[types.Part(text=" ".join(partes))])],
             turn_complete=True,
         )
+        logger.info(f"[4g] agente «{seccion['titulo']}» (idx={idx}) en marcha")
     except Exception:
-        logger.exception("[4g] no pude dar el turno inicial")
+        logger.exception("[4g] no pude inyectar el agente de sección")
 
 
-def _guion_confirmacion(seccion: dict, recap: str, siguiente: str | None, minutos: int | None) -> str:
-    """Indicación BREVE y ENTRE PARÉNTESIS (no se lee) para que Faro recapitule y pida confirmación.
-    En Presentación modula la invitación según el tiempo (>15 min anima; <=15 deja elegir)."""
-    destino = f"«{siguiente}»" if siguiente else "cerrar tu Canva"
-    extra = ""
-    if seccion["key"] == "presentacion" and minutos is not None:
-        extra = (f" Tiene unos {minutos} minutos, tiempo de sobra: anímale a seguir." if minutos > 15
-                 else f" Solo tiene unos {minutos} minutos y la Visión pide calma: dile que puede "
-                      "seguir igual o dejarla para otra sesión, y que elija.")
-    return (
-        f"(Ya tienes todas las respuestas de esta parte. Menciónalas de pasada y con naturalidad "
-        f"({recap}), SIN preguntar si son correctas —el usuario ya las ve en pantalla—. Luego, en "
-        f"tono de INVITACIÓN, propón seguir: algo como «si todo está bien, te invito a seguir con "
-        f"{destino}». Si te corrige algún dato, acéptalo con naturalidad.{extra})"
-    )
-
-
-async def _pedir_confirmacion(ws: WebSocket, shared: dict, idx: int) -> None:
-    """Inyecta el guion de confirmación (recap + invitación) y marca el estado AWAITING_CONFIRM."""
-    ses = shared.get("session")
-    if ses is None:
+async def _invitar_siguiente(session, shared: dict, idx: int) -> None:
+    """El bloque `idx` está completo: Faro invita a la persona a pulsar el siguiente apartado cuando
+    quiera. NO auto-avanza (la transición la inicia el USUARIO con el botón del bloque)."""
+    if session is None:
         return
     seccion = canva4g.SECCIONES[idx]
-    datos = shared["canva"].get(seccion["key"]) or {}
-    recap = _valores_seccion(seccion, datos) or "tus respuestas"
-    nxt = _siguiente_pendiente(shared["canva"], idx)
-    siguiente = canva4g.SECCIONES[nxt]["titulo"] if nxt is not None else None
-    minutos = _parse_minutos(datos.get("tiempo_disponible")) if seccion["key"] == "presentacion" else None
-    txt = _guion_confirmacion(seccion, recap, siguiente, minutos)
-    shared["_await_confirm"] = True
-    shared["_conv_confirm"] = len(shared.get("conv", ""))
-    shared["_hablo_tras_recap"] = False   # el watchdog solo repregunta si NO has hablado tras el recap
-    shared["bot_speaking"] = True
-    try:
-        await ses.send_client_content(
-            turns=[types.Content(role="user", parts=[types.Part(text=txt)])],
-            turn_complete=True,
-        )
-        logger.info(f"[4g] pido confirmación '{seccion['key']}' (recap; siguiente={siguiente})")
-    except Exception:
-        logger.exception("[4g] no pude pedir confirmación")
-
-
-# --------------------------------------------------------------------------- #
-# VAD por-frame: misma lógica que live_relay._browser_to_gemini, pero SIN ser dueño del
-# ws.receive() (el control loop le pasa cada frame). Permite ciclar la sesión por debajo.
-# --------------------------------------------------------------------------- #
-class _Vad:
-    """Detector de turno por energía (histéresis + anti-pico + anti-eco), por-frame."""
-
-    def __init__(self, vad: dict):
-        self.open_peak = vad["open_peak"]
-        self.keep_peak = vad["keep_peak"]
-        self.start_frames = vad["start_frames"]
-        self.end_silence = vad["end_silence"]
-        self.barge_frames = vad["barge_frames"]
-        self.in_speech = False
-        self.sil = 0
-        self.hot = 0
-        self.prefix = collections.deque(maxlen=BARGE_MAX)  # preludio: cubre hasta el barge más largo
-        self.turn = bytearray()                            # audio del turno en curso (para STT fiable)
-
-    async def feed(self, session, audio: bytes, shared: dict) -> None:
-        try:
-            s = array.array("h")
-            s.frombytes(audio)
-            peak = max((abs(x) for x in s), default=0)
-        except Exception:
-            peak = 0
-
-        if not self.in_speech:
-            self.prefix.append(audio)
-            # Anti-eco: mientras Faro habla, ignorar el micro por completo (su audio por el
-            # altavoz no debe abrir turno ni interrumpirla en esta vía).
-            if shared.get("no_barge") and shared.get("bot_speaking"):
-                self.hot = 0
-                return
-            # Frames de voz sostenida para ABRIR turno. En la fase de confirmación esperamos una
-            # respuesta CORTA (sí/no) y basta UN frame: un "sí" de ~150ms no junta 2 frames y se
-            # perdía. Falsos positivos baratos: el recap + clasificar_intencion descartan lo que no
-            # sea sí/no, y abrir aunque sea por ruido cuenta como input → no deja morir la sesión.
-            if shared.get("bot_speaking"):
-                need = self.barge_frames
-            elif shared.get("_await_confirm"):
-                need = 1
-            else:
-                need = self.start_frames
-            self.hot = min(need, self.hot + 1) if peak >= self.open_peak else max(0, self.hot - 1)
-            self._dbg_max = max(getattr(self, "_dbg_max", 0), peak)   # TEMP diagnóstico VAD
-            self._dbg_n = getattr(self, "_dbg_n", 0) + 1
-            if self._dbg_n >= 25:
-                logger.info(
-                    f"[4g VAD] esperando voz peak_max~{self._dbg_max} umbral={self.open_peak} "
-                    f"hot={self.hot} need={need} bot={shared.get('bot_speaking')}")
-                self._dbg_max, self._dbg_n = 0, 0
-            if self.hot >= need:
-                logger.info(f"[4g VAD] turno ABIERTO peak={peak} need={need}")   # TEMP
-                await session.send_realtime_input(activity_start=types.ActivityStart())
-                self.in_speech, self.sil, self.hot = True, 0, 0
-                shared["_hablo_tras_recap"] = True   # has intervenido: el watchdog NO debe repreguntar
-                self.turn = bytearray()
-                for buf in list(self.prefix)[-need:]:           # vuelca el preludio: no se clipa
-                    self.turn += buf
-                    await session.send_realtime_input(
-                        audio=types.Blob(data=buf, mime_type="audio/pcm;rate=16000"))
-                self.prefix.clear()
-            return
-
-        # en turno: reenviamos audio (y lo bufferizamos para el STT fiable) y vigilamos el silencio
-        self.turn += audio
-        await session.send_realtime_input(
-            audio=types.Blob(data=audio, mime_type="audio/pcm;rate=16000"))
-        if peak >= self.keep_peak:
-            self.sil = 0
-        else:
-            self.sil += 1
-            if self.sil >= self.end_silence:
-                await session.send_realtime_input(activity_end=types.ActivityEnd())
-                self.in_speech, self.sil = False, 0
-                shared["_turno_audio"] = bytes(self.turn)   # turno completo → disponible para STT
-                self.turn = bytearray()
-
-
-def _siguiente_pendiente(canva: dict, desde: int) -> int | None:
-    """Índice de la siguiente sección NO completa tras `desde` (recoge también las anteriores que
-    se hubieran saltado); None si están todas. Es el destino del auto-avance al terminar una sección."""
-    n = len(canva4g.SECCIONES)
-    for i in list(range(desde + 1, n)) + list(range(0, desde)):
-        s = canva4g.SECCIONES[i]
-        if not canva4g.seccion_completa(s, canva.get(s["key"])):
-            return i
-    return None
-
-
-async def _invitar_a_seguir(ws: WebSocket, shared: dict, idx: int) -> None:
-    """El bloque está COMPLETO: lo marca ✓ e INVITA a la persona a pulsar el siguiente cuando quiera.
-    NO auto-avanza: la transición la dispara el USUARIO con el botón. Se llama una sola vez por bloque."""
-    seccion = canva4g.SECCIONES[idx]
-    key = seccion["key"]
-    try:
-        await ws.send_text(json.dumps({"type": "section_done", "idx": idx, "key": key}))
-    except Exception:
-        pass
-    nxt = _siguiente_pendiente(shared["canva"], idx)
-    siguiente = canva4g.SECCIONES[nxt]["titulo"] if nxt is not None else None
-    logger.info(f"[4g] '{key}' completo → invito a seguir (siguiente={siguiente})")
-    ses = shared.get("session")
-    if ses is None:
-        return
+    nxt = idx + 1
+    siguiente = canva4g.SECCIONES[nxt]["titulo"] if nxt < len(canva4g.SECCIONES) else None
     if siguiente:
         txt = (f"(Ya tienes todo lo de «{seccion['titulo']}». Dile a la persona, en UNA frase breve y "
-               f"cálida, que cuando quiera puede pulsar «{siguiente}» para continuar. NO empieces tú esa "
-               f"parte ni hagas más preguntas: solo invítale y quédate a la espera.)")
+               f"cálida, que cuando quiera puede pulsar «{siguiente}» para seguir. NO empieces tú esa "
+               f"fase ni hagas más preguntas: solo invítale y espera.)")
     else:
         txt = ("(Habéis completado TODO el Canva. Felicítale en una frase y dile que su Plataforma "
                "Estratégica Personal ya está lista. No hagas más preguntas.)")
     shared["bot_speaking"] = True
     try:
-        await ses.send_client_content(
+        await session.send_client_content(
             turns=[types.Content(role="user", parts=[types.Part(text=txt)])],
             turn_complete=True,
         )
+        logger.info(f"[4g] '{seccion['key']}' completo → invito a seguir (siguiente={siguiente})")
     except Exception:
         logger.exception("[4g] no pude invitar a seguir")
 
 
-async def _extraer_y_push(ws: WebSocket, shared: dict, idx: int):
-    """Extrae el apartado `idx`, actualiza el Canva en vivo y, cuando queda COMPLETO (tras una
-    intervención del usuario), invita UNA vez a pasar al siguiente. SIN auto-avance: la transición la
-    decide el usuario pulsando el botón del siguiente bloque. Best-effort."""
+async def _control_4g(data: dict, session, shared: dict) -> None:
+    """Mensajes de control del navegador propios del 4g. {type:'goto', idx}: el USUARIO inicia el
+    apartado `idx` → relevamos al agente de ese bloque en la misma sesión (inicio manual)."""
+    if data.get("type") != "goto":
+        return
+    try:
+        idx = int(data.get("idx"))
+    except (TypeError, ValueError):
+        return
+    if not (0 <= idx < len(canva4g.SECCIONES)):
+        return
+    shared["sec_idx"] = idx
+    shared.setdefault("_firma", {}).pop(canva4g.SECCIONES[idx]["key"], None)   # re-evaluar limpio
+    shared.get("_invitado", set()).discard(canva4g.SECCIONES[idx]["key"])
+    await _inyectar_agente(session, shared, idx)
+
+
+async def _extraer_y_push(ws: WebSocket, shared: dict):
+    """Extrae la sección activa de la conversación, actualiza el Canva, lo empuja al
+    navegador y avanza de sección si el código la da por completa. Best-effort."""
+    idx = shared["sec_idx"]
     if idx >= len(canva4g.SECCIONES):
         return
-    if shared.get("sec_idx") != idx:
-        return   # tarea obsoleta: la sección activa ya cambió (no contaminar a la nueva)
     seccion = canva4g.SECCIONES[idx]
-    key = seccion["key"]
     conv = shared.get("conv", "")
     if not conv.strip():
         return
+    # STT fiable de respaldo: re-transcribe el audio del último turno en ESPAÑOL (corrige los nombres
+    # que native-audio destroza, p.ej. 'José'→'Suchen') y se lo damos al extractor como fuente prioritaria.
     audio_turno = shared.pop("_turno_audio", None)
-
-    # STT fiable de respaldo (español) del último turno: corrige la burbuja y prioriza la extracción.
     stt_fiable = await canva4g.transcribir_audio(audio_turno) if audio_turno else ""
     if stt_fiable:
         logger.info(f"[4g] STT fiable: «{stt_fiable}»")
-        try:
-            await ws.send_text(json.dumps({"type": "user_fix", "text": stt_fiable}))
-        except Exception:
-            pass
-    datos = await canva4g.extraer_seccion(key, conv, shared["fecha_str"], stt_fiable)
+    datos = await canva4g.extraer_seccion(seccion["key"], conv, shared["fecha_str"], stt_fiable)
     if not datos:
         return
-    shared["canva"][key] = canva4g.merge_seccion(seccion, shared["canva"].get(key) or {}, datos)
-    logger.info(f"[4g] extracción '{key}' -> {shared['canva'].get(key)}")
+    if shared.get("sec_idx") != idx:
+        return   # TAREA OBSOLETA: el usuario cambió de bloque mientras corrían el STT/extracción (lentos).
+                 # Sin esto, una extracción del bloque anterior podría invitar/cerrar el bloque NUEVO.
+    # Merge no destructivo (no pisa datos ya capturados con vacíos).
+    prev = shared["canva"].get(seccion["key"]) or {}
+    shared["canva"][seccion["key"]] = canva4g.merge_seccion(seccion, prev, datos)
+    logger.info(f"[4g] extracción '{seccion['key']}' -> {datos}")
     try:
-        await ws.send_text(json.dumps({"type": "canva", "canva": shared["canva"]}))
+        await ws.send_text(json.dumps({"type": "canva", "canva": shared["canva"],
+                                       "completas": canva4g.completas(shared["canva"])}))
     except Exception:
         return
+    # Persistencia incremental (best-effort).
     try:
         await canva4g.guardar_canva(shared["user_id"], shared["canva"], shared["subject_id"])
     except Exception:
         logger.exception("[4g] no pude guardar canva (incremental)")
-    if shared.get("sec_idx") != idx:
-        return
-    # COMPLETO + el usuario ya ha intervenido + aún no invitado → marcar ✓ e INVITAR (una sola vez).
-    if (canva4g.seccion_completa(seccion, shared["canva"].get(key))
-            and "Persona:" in conv and not shared.get("_invitado")):
-        shared["_invitado"] = True
-        if key == "bloque":
-            await _agendar_bloque(ws, shared)
-        await _invitar_a_seguir(ws, shared, idx)
+    # Compuerta CON CONFIRMACIÓN: avanzar solo si la sección está completa Y el dato es ESTABLE
+    # (la misma información en dos extracciones seguidas). Así no se avanza con un dato del primer
+    # turno (saludo/ruido, p.ej. tomar "gan" como nombre) y se da margen a que la guía confirme.
+    key = seccion["key"]
+    cur = shared["canva"].get(key)
+    firmas = shared.setdefault("_firma", {})
+    invitados = shared.setdefault("_invitado", set())
+    if canva4g.seccion_completa(seccion, cur):
+        firma = _firma_oblig(seccion, cur)
+        if firmas.get(key) == firma:                      # estable → completa de verdad
+            if key == "bloque":
+                await _agendar_bloque(ws, shared)
+            if key not in invitados:                      # SIN auto-avance: invitar UNA vez y CERRAR.
+                invitados.add(key)                        # El usuario inicia el siguiente con su botón.
+                logger.info(f"[4g] sección '{key}' COMPLETA → invito a seguir y cierro el bloque")
+                await _invitar_siguiente(shared.get("session"), shared, idx)
+                try:   # el navegador deja de escuchar este bloque (se cierra solo); el usuario abre el siguiente
+                    await ws.send_text(json.dumps({"type": "cerrado", "key": key, "idx": idx}))
+                except Exception:
+                    pass
+        else:                                             # 1ª vez completa: espera 2ª (estabilidad)
+            firmas[key] = firma
+            logger.info(f"[4g] sección '{key}' completa; espero 2ª (estabilidad)")
+    else:
+        firmas.pop(key, None)                             # dejó de estar completa → reset
+        invitados.discard(key)
 
 
 async def _agendar_bloque(ws: WebSocket, shared: dict):
@@ -439,9 +261,9 @@ async def _agendar_bloque(ws: WebSocket, shared: dict):
 
 
 async def _gemini_to_browser_4g(ws: WebSocket, session, shared: dict):
-    """Audio + transcripción de Gemini → navegador, acumulando la conversación de ESTA sección.
-    Al cierre de cada turno dispara la extracción (en background) fijando el idx ACTUAL, para que
-    no contamine a otra sección si el usuario cambia mientras tanto."""
+    """Audio + transcripción de Gemini → navegador, acumulando la conversación. Al cierre
+    de cada turno (turn_complete) dispara la extracción de la sección activa (en background,
+    para no bloquear el audio)."""
     try:
         while True:
             async for response in session.receive():
@@ -450,13 +272,13 @@ async def _gemini_to_browser_4g(ws: WebSocket, session, shared: dict):
                     continue
                 if sc.interrupted:
                     shared["bot_speaking"] = False
-                    logger.info("[4g] INTERRUPTED (barge-in)")
+                    logger.info("[4g] INTERRUPTED (barge-in detectado)")
                     await ws.send_text(json.dumps({"type": "interrupted"}))
                 if getattr(sc, "generation_complete", None) or getattr(sc, "turn_complete", None):
                     shared["bot_speaking"] = False
                 if getattr(sc, "turn_complete", None):
-                    cur_idx = shared["sec_idx"]
-                    asyncio.create_task(_extraer_y_push(ws, shared, cur_idx))
+                    # Fin de intercambio: extraer la sección activa (sin bloquear el loop).
+                    asyncio.create_task(_extraer_y_push(ws, shared))
                 if sc.model_turn:
                     for part in (sc.model_turn.parts or []):
                         inline = getattr(part, "inline_data", None)
@@ -477,123 +299,15 @@ async def _gemini_to_browser_4g(ws: WebSocket, session, shared: dict):
                         shared["_last"] = "bot"
                     shared["conv"] += ot.text
                     await ws.send_text(json.dumps({"type": "bot", "text": ot.text}))
-    except asyncio.CancelledError:
-        raise
     except Exception:
         logger.exception("[4g] gemini->browser ERROR")
 
 
-# --------------------------------------------------------------------------- #
-# Ciclo de vida de una sección: cada una es su propia sesión Gemini.
-# --------------------------------------------------------------------------- #
-async def _run_section(ws: WebSocket, shared: dict, vad: dict, idx: int):
-    """Abre una sesión Gemini para la sección `idx` con su conducción en el system_instruction, le
-    da el turno inicial y la mantiene hasta que se pide parar (`stop_event`) o el navegador se va.
-    Ventana pequeña: conversación reseteada."""
-    seccion = canva4g.SECCIONES[idx]
-    shared["sec_idx"] = idx   # también para el camino de auto-avance (que no pasa por _iniciar_seccion)
-    datos = shared["canva"].get(seccion["key"]) or {}
-    arranque = not shared.get("presentado")
-    reanuda = shared.get("reanuda", False)
-    # La conducción de la sección (preguntas/saludo) va al SYSTEM_INSTRUCTION (no se vocaliza).
-    cfg = _preparar_prompt(shared["cfg_base"], shared["fecha_str"], shared["canva"])
-    bloque = _instruccion_seccion(seccion, arranque, reanuda, datos)
-    # B (forzar es-ES en la transcripción de native-audio) DESACTIVADO: desestabilizaba/cerraba la
-    # sesión (native-audio no admite bien `language_codes`). El STT fiable (C) ya cubre la precisión.
-    cfg = {**cfg, "system_instruction": cfg["system_instruction"] + "\n\n" + bloque}
-    model, live_config = _build_config(cfg)
-    try:
-        async with _client.aio.live.connect(model=model, config=live_config) as session:
-            shared["session"] = session
-            shared["vad_obj"] = _Vad(vad)
-            shared["conv"] = ""
-            shared["_last"] = None
-            shared["bot_speaking"] = False
-            # Aún no hemos invitado a seguir en este bloque (la invitación se dispara UNA vez, cuando
-            # el bloque queda completo tras la primera intervención del usuario — guard en _extraer_y_push).
-            shared["_invitado"] = False
-            shared["presentado"] = True
-            await ws.send_text(json.dumps({
-                "type": "section_started", "idx": idx, "key": seccion["key"]}))
-            down = asyncio.create_task(_gemini_to_browser_4g(ws, session, shared))
-            await _disparar(session, shared)   # turno inicial mínimo y entre paréntesis
-            waiter = asyncio.create_task(shared["stop_event"].wait())
-            _, pending = await asyncio.wait({down, waiter}, return_when=asyncio.FIRST_COMPLETED)
-            for t in pending:
-                t.cancel()
-    except Exception:
-        logger.exception(f"[4g] _run_section idx={idx} error")
-    finally:
-        shared["session"] = None
-        shared["vad_obj"] = None
-        try:
-            await ws.send_text(json.dumps({
-                "type": "section_stopped", "idx": idx, "key": seccion["key"]}))
-        except Exception:
-            pass
-        try:
-            await canva4g.guardar_canva(shared["user_id"], shared["canva"], shared["subject_id"])
-        except Exception:
-            logger.exception("[4g] no pude guardar canva al cerrar sección")
-        # SIN auto-avance: la transición entre bloques la dispara el USUARIO (pulsando el siguiente,
-        # que manda start_section → _iniciar_seccion). Aquí solo cerramos limpio el bloque actual.
-
-
-async def _detener_seccion(shared: dict):
-    """Cierra la sección activa (si la hay) y espera a que su tarea limpie. Marca `_detaining` para
-    que la tarea que se cierra NO dispare el auto-avance (es un cierre MANUAL, no por completarse)."""
-    ev = shared.get("stop_event")
-    task = shared.get("section_task")
-    shared["_detaining"] = True
-    if ev is not None and not ev.is_set():
-        ev.set()
-    if task is not None:
-        try:
-            await task
-        except Exception:
-            pass
-    shared["section_task"] = None
-    shared["stop_event"] = None
-    shared["_detaining"] = False
-
-
-async def _iniciar_seccion(ws: WebSocket, shared: dict, vad: dict, idx):
-    """Abre la sección `idx` cerrando antes la anterior (auto-close). idx None → la activa."""
-    await _detener_seccion(shared)
-    if idx is None:
-        idx = shared.get("sec_idx", 0)
-    try:
-        idx = int(idx)
-    except (TypeError, ValueError):
-        idx = shared.get("sec_idx", 0)
-    idx = max(0, min(idx, len(canva4g.SECCIONES) - 1))
-    shared["sec_idx"] = idx
-    shared["stop_event"] = asyncio.Event()
-    shared["section_task"] = asyncio.create_task(_run_section(ws, shared, vad, idx))
-    logger.info(f"[4g] iniciar sección idx={idx} key={canva4g.SECCIONES[idx]['key']}")
-
-
-def _aplicar_vad(shared: dict, vad: dict, data: dict):
-    """Ajuste de VAD en vivo desde el panel: actualiza el dict base y el _Vad activo si lo hay."""
-    if data.get("threshold") is not None:
-        nv = _vad_from_open(_clamp_open(data.get("threshold")))
-        vad["open_peak"], vad["keep_peak"] = nv["open_peak"], nv["keep_peak"]
-    if data.get("end_silence") is not None:
-        vad["end_silence"] = _clamp_silence(data.get("end_silence"))
-    if data.get("barge_frames") is not None:
-        vad["barge_frames"] = _clamp_barge(data.get("barge_frames"))
-    vo = shared.get("vad_obj")
-    if vo is not None:
-        vo.open_peak, vo.keep_peak = vad["open_peak"], vad["keep_peak"]
-        vo.end_silence = vad["end_silence"]
-        vo.barge_frames = vad["barge_frames"]
-
-
 @router.websocket("/ws/4g")
 async def ws_4g(ws: WebSocket):
-    """Onboarding 4G por voz, sesión-por-sección. El navegador manda primero {type:'config',
-    user_id}; luego abre/cierra secciones con start_section/stop_section y envía audio PCM16 16k.
-    El control loop despacha el audio a la sesión activa y procesa los mensajes de control."""
+    """Onboarding 4G por voz. El navegador manda primero {type:'config', user_id} y luego
+    audio PCM16 16k; nosotros conducimos la entrevista con la persona del servicio '4g' y
+    rellenamos el Canva en vivo."""
     await ws.accept()
     logger.info("[4g] WS conectado; esperando config…")
     user_id = "anonimo"
@@ -608,80 +322,50 @@ async def ws_4g(ws: WebSocket):
     except Exception:
         logger.exception("[4g] handshake de config falló; sigo con anonimo")
 
-    cfg_base, subject_id = await _cargar_cfg_4g()
+    cfg, subject_id = await _cargar_cfg_4g()
     fecha_str = _fecha_ctx()
     canva_prev = await canva4g.obtener_canva(user_id)
-    vad = _vad_params(cfg_base)
-    # 4g: VAD MÁS sensible que /call — el usuario da respuestas cortas y aisladas, y el camino con
-    # native-audio se queda mudo si no abrimos turno. Basta 1 frame fuerte para abrir (no 2) y bajamos
-    # el umbral (el ruido de fondo medido ~70-545 queda muy por debajo, apenas hay falsos positivos).
-    vad["start_frames"] = 1
-    vad["open_peak"] = min(vad["open_peak"], 1000)
-    vad["keep_peak"] = max(int(vad["open_peak"] * 0.5), 500)
+    cfg = _preparar_prompt(cfg, fecha_str, canva_prev)
+    model, live_config = _build_config(cfg)
+    vad = _vad_params(cfg)
+
     shared = {
-        "user_id": user_id, "subject_id": subject_id, "cfg_base": cfg_base,
-        "fecha_str": fecha_str, "canva": canva_prev or {},
-        "sec_idx": canva4g.primera_incompleta(canva_prev),
-        "conv": "", "_last": None, "no_barge": True, "bot_speaking": False,
-        "session": None, "vad_obj": None, "section_task": None, "stop_event": None,
-        "reanuda": bool(canva4g.resumen_canva(canva_prev)), "presentado": False, "_booked": False,
+        "bot_speaking": False, "user_id": user_id, "subject_id": subject_id,
+        "canva": canva_prev or {}, "sec_idx": canva4g.primera_incompleta(canva_prev),
+        "fecha_str": fecha_str, "conv": "", "_last": None,
+        "no_barge": True,   # anti-eco: el micro se ignora mientras Faro habla
+        "_captura_turno": True,   # guarda el audio de cada turno para el STT fiable de respaldo
     }
-    logger.info(f"[4g] sesión user={user_id} subject={subject_id} activa={shared['sec_idx']}")
-    _SESIONES_4G[user_id] = shared
+    logger.info(f"[4g] sesión user={user_id} model={model} voz={cfg.get('voice')} "
+                f"sec_idx={shared['sec_idx']}")
     try:
-        await ws.send_text(json.dumps({
-            "type": "ready",
-            "secciones": _secciones_publicas_con_prompt(),
-            "activa": shared["sec_idx"],
-            "canva": shared["canva"],
-            "completas": canva4g.completas(shared["canva"]),
-        }))
-        while True:
-            msg = await ws.receive()
-            if msg.get("type") == "websocket.disconnect":
-                break
-            txt = msg.get("text")
-            if txt:
-                try:
-                    data = json.loads(txt)
-                except Exception:
-                    continue
-                t = data.get("type")
-                if t == "start_section":
-                    await _iniciar_seccion(ws, shared, vad, data.get("idx"))
-                elif t == "stop_section":
-                    await _detener_seccion(shared)
-                elif t == "vad":
-                    _aplicar_vad(shared, vad, data)
-                continue
-            audio = msg.get("bytes")
-            if not audio:
-                continue
-            vo = shared.get("vad_obj")
-            ses = shared.get("session")
-            shared["_frames"] = shared.get("_frames", 0) + 1
-            if shared["_frames"] % 50 == 0:   # TEMP diagnóstico (~4s de audio)
-                logger.info(
-                    f"[4g dbg] frames={shared['_frames']} vad={'sí' if vo else 'NO'} "
-                    f"ses={'sí' if ses else 'NO'} bot={shared.get('bot_speaking')} "
-                    f"in_speech={getattr(vo, 'in_speech', None)}")
-            if vo is not None and ses is not None:
-                try:
-                    await vo.feed(ses, audio, shared)
-                except Exception:
-                    logger.exception("[4g] vad.feed ERROR")  # antes se tragaba en silencio
+        async with _client.aio.live.connect(model=model, config=live_config) as session:
+            shared["session"] = session   # para el relevo de rol por bloque (inyección en vivo)
+            await ws.send_text(json.dumps({
+                "type": "ready", "model": model,
+                "secciones": canva4g.secciones_publicas(),
+                "activa": shared["sec_idx"], "canva": shared["canva"],
+                "completas": canva4g.completas(shared["canva"]),
+            }))
+            up = asyncio.create_task(
+                _browser_to_gemini(ws, session, vad, shared, on_control=_control_4g))
+            down = asyncio.create_task(_gemini_to_browser_4g(ws, session, shared))
+            # SIN auto-arranque: Faro NO conduce solo. Cada apartado lo inicia el USUARIO con su botón
+            # ({type:"goto", idx} → _control_4g → _inyectar_agente), de modo que son 'agentes' por
+            # bloque (cada uno con la memoria de lo anterior) sobre UNA sola sesión → la voz no se toca.
+            _, pending = await asyncio.wait({up, down}, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+            logger.info("[4g] sesión finalizada")
     except WebSocketDisconnect:
         logger.info("[4g] navegador desconectado")
-    except Exception:
+    except Exception as e:
         logger.exception("[4g] error en /ws/4g")
         try:
-            await ws.send_text(json.dumps({"type": "error", "detail": "error interno"}))
+            await ws.send_text(json.dumps({"type": "error", "detail": str(e)}))
         except Exception:
             pass
     finally:
-        await _detener_seccion(shared)
-        if _SESIONES_4G.get(user_id) is shared:   # no pisar una reconexión más nueva del mismo user
-            _SESIONES_4G.pop(user_id, None)
         try:
             await canva4g.guardar_canva(user_id, shared["canva"], subject_id)
         except Exception:
@@ -690,25 +374,6 @@ async def ws_4g(ws: WebSocket):
             await ws.close()
         except Exception:
             pass
-
-
-def _secciones_publicas_con_prompt() -> list[dict]:
-    """Secciones públicas + el PROMPT inyectado a Faro en cada una (vista de pruebas para afinar):
-    `prompt_seccion` (la conducción/preguntas que va al system_instruction) y `prompt_confirmacion`
-    (la invitación a seguir). Versión preview con valores neutros."""
-    secs = canva4g.SECCIONES
-    out = []
-    for i, pub in enumerate(canva4g.secciones_publicas()):
-        s = secs[i]
-        recap = _valores_seccion(s, {}) or "(lo que el usuario haya dicho)"
-        sig = secs[i + 1]["titulo"] if i + 1 < len(secs) else None
-        minutos = 20 if s["key"] == "presentacion" else None
-        out.append({
-            **pub,
-            "prompt_seccion": _instruccion_seccion(s, arranque=False, reanuda=False, datos={}),
-            "prompt_confirmacion": _guion_confirmacion(s, recap, sig, minutos),
-        })
-    return out
 
 
 @router.post("/api/4g/reset")
@@ -729,16 +394,6 @@ async def reset_4g(payload: dict):
                     borrados += 1
         except Exception:
             logger.exception("[4g] reset: fallo borrando eventos de Calendar")
-    # Limpia también el Canva EN MEMORIA de la sesión WS viva (si la hay), para que al cerrar no
-    # re-guarde el viejo y deshaga el reset.
-    sh = _SESIONES_4G.get(user_id)
-    if sh is not None:
-        sh["canva"] = {}
-        sh["_await_confirm"] = False
-        sh["_done_sec"] = False
-        sh["_booked"] = False
-        sh["sec_idx"] = 0
-        logger.info(f"[4g] reset: limpiada la sesión WS activa de user={user_id} (Canva en memoria)")
     await canva4g.borrar_canva(user_id)
     logger.info(f"[4g] reset user={user_id}: Canva borrado, {borrados} evento(s) de Calendar")
     return {"ok": True, "eventos_borrados": borrados}
@@ -746,7 +401,9 @@ async def reset_4g(payload: dict):
 
 @router.get("/api/4g/canva")
 async def get_canva(user_id: str):
-    """Canva guardado + sección activa + keys completas (para pintar el estado real al entrar)."""
+    """Canva guardado + sección activa (para pintar el estado real al entrar; arregla que el
+    stepper marcara como hecha una sección por existir la clave en vez de por estar completa)."""
     canva = await canva4g.obtener_canva(user_id)
-    return {"canva": canva, "secciones": _secciones_publicas_con_prompt(),
-            "activa": canva4g.primera_incompleta(canva), "completas": canva4g.completas(canva)}
+    return {"canva": canva, "secciones": canva4g.secciones_publicas(),
+            "activa": canva4g.primera_incompleta(canva),
+            "completas": canva4g.completas(canva)}

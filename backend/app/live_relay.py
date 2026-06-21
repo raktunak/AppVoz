@@ -320,7 +320,7 @@ def _usage_dict(um) -> dict:
     }
 
 
-async def _browser_to_gemini(ws: WebSocket, session, vad: dict, shared: dict):
+async def _browser_to_gemini(ws: WebSocket, session, vad: dict, shared: dict, on_control=None):
     """Audio del navegador → Gemini, con VAD por energía (histéresis + anti-pico + gate)
     que señaliza el turno. Mientras NO hay turno no reenviamos audio a Gemini (el ruido de
     fondo nunca llega); al abrir, volcamos un pequeño preludio para no clipar el inicio.
@@ -334,6 +334,7 @@ async def _browser_to_gemini(ws: WebSocket, session, vad: dict, shared: dict):
     barge_frames = vad["barge_frames"]
     in_speech, sil, hot = False, 0, 0
     prefix = collections.deque(maxlen=BARGE_MAX)  # preludio (cubre hasta el barge-in más largo)
+    turno = bytearray()   # audio del turno en curso (STT fiable de respaldo; solo se guarda si la vía lo pide)
     dbg_max, dbg_n = 0, 0   # TEMP: diagnóstico de por qué no abre la compuerta
     try:
         while True:
@@ -358,8 +359,11 @@ async def _browser_to_gemini(ws: WebSocket, session, vad: dict, shared: dict):
                         logger.info(
                             f"VAD en vivo: open_peak={open_peak} end_silence={end_silence} "
                             f"barge={barge_frames}")
+                    elif on_control is not None:
+                        # Otros mensajes de control específicos de la vía (p.ej. 4g: cambiar de bloque).
+                        await on_control(data, session, shared)
                 except Exception:
-                    pass
+                    logger.exception("browser->gemini: on_control/VAD ERROR")
                 continue
             audio = msg.get("bytes")
             if not audio:
@@ -390,13 +394,16 @@ async def _browser_to_gemini(ws: WebSocket, session, vad: dict, shared: dict):
                     logger.info(f"[VAD dbg] turno ABIERTO peak={peak} need={need}")   # TEMP
                     await session.send_realtime_input(activity_start=types.ActivityStart())
                     in_speech, sil, hot = True, 0, 0
+                    turno = bytearray()
                     for buf in list(prefix)[-need:]:           # vuelca el preludio: no se clipa
+                        turno += buf
                         await session.send_realtime_input(
                             audio=types.Blob(data=buf, mime_type="audio/pcm;rate=16000"))
                     prefix.clear()
                 continue                                      # sin turno: NO mandamos ruido a Gemini
 
             # en turno: reenviamos el audio y vigilamos el silencio para cerrar
+            turno += audio
             await session.send_realtime_input(
                 audio=types.Blob(data=audio, mime_type="audio/pcm;rate=16000")
             )
@@ -407,6 +414,9 @@ async def _browser_to_gemini(ws: WebSocket, session, vad: dict, shared: dict):
                 if sil >= end_silence:
                     await session.send_realtime_input(activity_end=types.ActivityEnd())
                     in_speech, sil = False, 0
+                    if shared.get("_captura_turno"):   # vías que usan STT fiable (p.ej. 4g)
+                        shared["_turno_audio"] = bytes(turno)
+                    turno = bytearray()
     except WebSocketDisconnect:
         logger.info("browser->gemini: WS cerrado")
     except Exception:
