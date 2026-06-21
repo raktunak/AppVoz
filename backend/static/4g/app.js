@@ -143,22 +143,57 @@ function renderSeccion(card, seccion, datos) {
     card.appendChild(b);
   }
 }
+// ---- prompt por agente (editable) + referencia de lo que se inyecta ----
+function promptKey(key) { return "4g_prompt_" + key; }
+function guionDefault(s) {   // por defecto = las preguntas literales del bloque
+  if (s.tipo === "lista") return s.pregunta || "";
+  return (s.apartados || []).filter((a) => a.pregunta).map((a) => "«" + a.pregunta + "»").join("  ");
+}
+function guionDe(s) { return localStorage.getItem(promptKey(s.key)) || guionDefault(s); }
+function inyeccionPreview(s, guion) {   // boceto fiel de _inyectar_agente (referencia)
+  return "(Ahora céntrate SOLO en la fase «" + s.titulo + "». [1er bloque: preséntate como Faro; resto: " +
+    "enlaza sin saludar de nuevo.] Para dar continuidad, la persona YA te ha contado: {resumen de lo " +
+    "capturado}. Haz estas preguntas, una a una y TAL CUAL, esperando respuesta a cada una: " +
+    (guion || "—") + " Cuando tengas TODAS, NO sigas con otra fase: invita a pulsar el siguiente y espera.)";
+}
+function promptBox(s) {
+  const det = document.createElement("details"); det.className = "promptbox";
+  const sum = document.createElement("summary"); sum.textContent = "🔧 Prompt del agente";
+  const lblE = document.createElement("div"); lblE.className = "prompt-lbl";
+  lblE.textContent = "Editable (se usa al iniciar este bloque):";
+  const ta = document.createElement("textarea"); ta.className = "prompt-edit"; ta.rows = 3;
+  ta.value = guionDe(s);
+  const lblR = document.createElement("div"); lblR.className = "prompt-lbl";
+  lblR.textContent = "Lo que se inyecta (referencia):";
+  const ref = document.createElement("pre"); ref.className = "prompt-ref";
+  const refresh = () => { ref.textContent = inyeccionPreview(s, ta.value); };
+  ta.oninput = () => { localStorage.setItem(promptKey(s.key), ta.value); refresh(); };
+  refresh();
+  det.appendChild(sum); det.appendChild(lblE); det.appendChild(ta);
+  det.appendChild(lblR); det.appendChild(ref);
+  return det;
+}
 function renderCanva() {
   const grid = $("grid"); grid.innerHTML = "";
+  let firstPending = SECCIONES.findIndex((s) => !DONE.has(s.key));
+  if (firstPending < 0) firstPending = SECCIONES.length;   // todo hecho
   SECCIONES.forEach((s, i) => {
     const done = DONE.has(s.key);
     const enCurso = (i === ACTIVA && !done);   // 'done' manda: un bloque completo NO sigue «En curso»
+    const habilitado = done || enCurso || i === firstPending;   // ORDEN: solo el actual o repasar hechos
     const card = document.createElement("div");
-    card.className = "cv" + (enCurso ? " active" : "") + (done ? " done" : "");
+    card.className = "cv" + (enCurso ? " active" : "") + (done ? " done" : "") + (habilitado ? "" : " locked");
     const head = document.createElement("div"); head.className = "cv-head";
     const h = document.createElement("h3"); h.textContent = s.titulo;
     const btn = document.createElement("button");
     btn.className = "go" + (done ? " is-done" : (enCurso ? " on" : ""));
     btn.textContent = done ? "✓ Repasar" : (enCurso ? "● En curso" : "▶ Empezar");
-    btn.onclick = () => iniciarBloque(i);
+    btn.disabled = !habilitado;
+    if (habilitado) btn.onclick = () => iniciarBloque(i);
     head.appendChild(h); head.appendChild(btn);
     card.appendChild(head);
     renderSeccion(card, s, CANVA[s.key]);
+    card.appendChild(promptBox(s));
     grid.appendChild(card);
   });
 }
@@ -232,7 +267,8 @@ async function iniciarBloque(idx) {
     try { await connect(); } catch (e) { setStatus("No pude conectar: " + e); stop(); return; }
   }
   if (!ws || ws.readyState !== 1) { setStatus("Conexión no lista; pulsa de nuevo."); return; }
-  ws.send(JSON.stringify({ type: "goto", idx }));
+  const s = SECCIONES[idx];
+  ws.send(JSON.stringify({ type: "goto", idx, guion: s ? guionDe(s) : "" }));
   micActivo = true; ACTIVA = idx; curWho = null; curBubble = null;
   renderStepper(); renderCanva();
   setStatus("Hablando con el agente de «" + (SECCIONES[idx] ? SECCIONES[idx].titulo : "") + "» — escucha y responde.");

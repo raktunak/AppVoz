@@ -71,6 +71,16 @@
     button.go.on { background: var(--accent2); color: #06182a; }
     button.go.is-done { background: transparent; color: var(--muted); border: 1px solid var(--line); }
     button.go.is-done:hover { color: var(--txt); border-color: var(--accent2); }
+    button.go:disabled { background: transparent; color: #4a5568; border: 1px solid var(--line); cursor: not-allowed; }
+    .cv.locked { opacity: .5; }
+    /* desplegable de prompt por agente (editable) + referencia */
+    .promptbox { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+    .promptbox summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+    .prompt-lbl { color: var(--muted); font-size: 11px; margin: 8px 0 3px; }
+    .prompt-edit { width: 100%; background: #0f1620; color: var(--txt); border: 1px solid var(--line);
+      border-radius: 8px; padding: 7px 9px; font-size: 12.5px; font-family: inherit; resize: vertical; }
+    .prompt-ref { white-space: pre-wrap; background: #11181f; border: 1px solid var(--line); border-radius: 8px;
+      padding: 7px 9px; font-size: 11.5px; color: var(--muted); margin: 0; max-height: 150px; overflow-y: auto; }
     .cv .val { font-size: 15px; line-height: 1.5; white-space: pre-wrap; }
     .cv .empty { color: #5a6776; font-style: italic; font-size: 14px; }
     .chip {

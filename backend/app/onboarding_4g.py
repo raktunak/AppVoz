@@ -95,7 +95,9 @@ async def _inyectar_agente(session, shared: dict, idx: int) -> None:
     if session is None or not (0 <= idx < len(canva4g.SECCIONES)):
         return
     seccion = canva4g.SECCIONES[idx]
-    guion = _guion_agente(seccion)
+    # Guion EDITABLE desde el desplegable del navegador (para afinar el prompt de cada agente en vivo);
+    # si no se ha tocado, el guion por defecto = las preguntas literales del bloque.
+    guion = (shared.get("_guion_custom", {}).get(idx) or "").strip() or _guion_agente(seccion)
     resumen = canva4g.resumen_canva(shared.get("canva"))
     if not shared.get("presentado"):
         apertura = "Es el COMIENZO: preséntate en UNA sola frase como Faro, la guía."
@@ -158,6 +160,9 @@ async def _control_4g(data: dict, session, shared: dict) -> None:
         return
     if not (0 <= idx < len(canva4g.SECCIONES)):
         return
+    guion = (data.get("guion") or "").strip()   # prompt editado en el desplegable del navegador
+    if guion:
+        shared.setdefault("_guion_custom", {})[idx] = guion
     shared["sec_idx"] = idx
     shared.setdefault("_firma", {}).pop(canva4g.SECCIONES[idx]["key"], None)   # re-evaluar limpio
     shared.get("_invitado", set()).discard(canva4g.SECCIONES[idx]["key"])
