@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Escuela online + IA — informe (panorama y aportación)</title>
+<style>
+  :root{
+    --bg:#f6f7fb; --card:#ffffff; --ink:#1d2330; --muted:#5b6577; --line:#e4e7ef;
+    --brand:#3d4ee8; --brand-soft:#eef0fe;
+    --green:#0f9d6b; --green-soft:#e6f6ef;
+    --amber:#c47d12; --amber-soft:#fdf3e1;
+    --red:#d2493f; --red-soft:#fbeae8;
+    --purple:#7a45cf; --purple-soft:#f1eafc;
+    --slate:#64748b; --slate-soft:#eef1f5;
+    --radius:14px; --shadow:0 1px 2px rgba(20,30,60,.06),0 8px 24px rgba(20,30,60,.06);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6; font-size:16px;
+  }
+  a{color:var(--brand); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1080px; margin:0 auto; padding:0 20px}
+
+  /* Header */
+  header.hero{
+    background:linear-gradient(135deg,#2b3bd6 0%,#5a3fd0 55%,#7a45cf 100%);
+    color:#fff; padding:54px 0 46px;
+  }
+  header.hero .wrap{max-width:1080px}
+  .kicker{text-transform:uppercase; letter-spacing:.14em; font-size:12px; font-weight:700; opacity:.85}
+  header.hero h1{font-size:34px; line-height:1.18; margin:.35em 0 .25em; font-weight:800; letter-spacing:-.01em}
+  header.hero p.sub{font-size:17px; opacity:.95; margin:.2em 0 0; max-width:760px}
+  .meta-row{margin-top:18px; font-size:13px; opacity:.9; display:flex; gap:18px; flex-wrap:wrap}
+  .meta-row span{display:inline-flex; align-items:center; gap:6px}
+
+  /* Sticky nav */
+  nav.toc{position:sticky; top:0; z-index:20; background:rgba(255,255,255,.92);
+    backdrop-filter:blur(8px); border-bottom:1px solid var(--line)}
+  nav.toc .wrap{display:flex; gap:6px; flex-wrap:wrap; padding:10px 20px}
+  nav.toc a{font-size:13px; font-weight:600; color:var(--muted); padding:6px 11px; border-radius:999px}
+  nav.toc a:hover{background:var(--brand-soft); color:var(--brand); text-decoration:none}
+
+  main{padding:34px 0 60px}
+  section{margin:0 0 40px}
+  h2.part{font-size:13px; font-weight:800; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--brand); margin:46px 0 6px}
+  h3.sec{font-size:25px; font-weight:800; letter-spacing:-.01em; margin:.1em 0 .5em}
+  h4{font-size:18px; font-weight:750; margin:1.4em 0 .4em}
+
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    box-shadow:var(--shadow); padding:22px 24px; margin:16px 0}
+
+  /* TL;DR box */
+  .tldr{border-left:5px solid var(--brand); background:var(--brand-soft)}
+  .tldr h3{margin-top:0; font-size:20px}
+  .tldr strong{color:#2331b8}
+
+  /* legend / badges */
+  .legend{display:flex; gap:10px; flex-wrap:wrap; font-size:13px; color:var(--muted); margin:8px 0 0}
+  .badge{display:inline-block; font-size:11.5px; font-weight:700; padding:2px 9px; border-radius:999px;
+    border:1px solid transparent; white-space:nowrap}
+  .b-star{background:var(--green-soft); color:var(--green); border-color:#bfe6d4}
+  .b-adj{background:var(--amber-soft); color:var(--amber); border-color:#f0dcb4}
+  .b-com{background:var(--slate-soft); color:var(--slate); border-color:#d7dde6}
+
+  /* generic chip rows */
+  .chips{display:flex; gap:8px; flex-wrap:wrap; margin:4px 0 14px}
+  .chip{font-size:12px; font-weight:700; padding:3px 11px; border-radius:8px; border:1px solid}
+  .c-good{background:var(--green-soft); color:var(--green); border-color:#bfe6d4}
+  .c-mid{background:var(--amber-soft); color:var(--amber); border-color:#f0dcb4}
+  .c-bad{background:var(--red-soft); color:var(--red); border-color:#f3cdc7}
+  .c-neu{background:var(--slate-soft); color:var(--slate); border-color:#d7dde6}
+
+  /* columns of catalog */
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px}
+  .mini{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px}
+  .mini h4{margin:.1em 0 .5em; font-size:16px; display:flex; align-items:center; gap:8px}
+  .mini ul{margin:.2em 0; padding-left:18px}
+  .mini li{margin:.18em 0; font-size:14.5px}
+  .tag{font-size:11px; font-weight:800; color:#fff; background:var(--slate); border-radius:6px;
+    padding:1px 7px; letter-spacing:.02em}
+
+  /* 3-col comparison block */
+  .areablock{margin:18px 0 8px}
+  .areahead{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+  .areahead .n{font-size:13px; font-weight:800; color:var(--brand); background:var(--brand-soft);
+    border-radius:8px; padding:2px 9px}
+  .areahead h4{margin:0; font-size:19px}
+  .cols3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:0; border:1px solid var(--line);
+    border-radius:12px; overflow:hidden; margin:10px 0}
+  .col{padding:14px 16px; border-right:1px solid var(--line)}
+  .col:last-child{border-right:none}
+  .col .lab{font-size:11px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; margin-bottom:6px}
+  .col p{margin:0; font-size:14px; color:#2a3142}
+  .col-have{background:#fbfbfd}
+  .col-have .lab{color:var(--slate)}
+  .col-give{background:var(--green-soft)}
+  .col-give .lab{color:var(--green)}
+  .col-front{background:var(--purple-soft)}
+  .col-front .lab{color:var(--purple)}
+  .verdict{font-size:13.5px; color:var(--muted); margin:2px 0 0; padding-left:2px}
+  .verdict b{color:var(--ink)}
+
+  /* tables */
+  table{width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; background:var(--card)}
+  th,td{text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  thead th{background:#f0f2f8; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted)}
+  tbody tr:hover{background:#fafbff}
+  td .chip{font-size:11px; padding:2px 8px}
+
+  /* warning section */
+  .warn{border-left:5px solid var(--red); background:var(--red-soft)}
+  .warn h3{margin-top:0; color:#a8362d}
+  .warn ul{margin:.3em 0}
+  .warn li{margin:.4em 0}
+
+  /* final verdict highlight */
+  .bet{border-left:5px solid var(--green); background:var(--green-soft)}
+  .bet h3{margin-top:0; color:#0b7a53}
+  .closer{font-size:16px; background:#0f1730; color:#eef1ff; border-radius:var(--radius);
+    padding:20px 24px; margin:18px 0}
+  .closer b{color:#fff}
+
+  footer{border-top:1px solid var(--line); color:var(--muted); font-size:13px; padding:24px 0 40px}
+  .pill{display:inline-block; background:var(--slate-soft); color:var(--slate); border-radius:999px;
+    padding:2px 10px; font-size:12px; font-weight:700; margin-right:6px}
+
+  @media (max-width:760px){
+    .cols3{grid-template-columns:1fr}
+    .col{border-right:none; border-bottom:1px solid var(--line)}
+    .col:last-child{border-bottom:none}
+    header.hero h1{font-size:27px}
+  }
+  @media print{
+    nav.toc{display:none} body{background:#fff}
+    .card,.mini,.cols3{box-shadow:none}
+    header.hero{background:#2b3bd6 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="kicker">AppVoz · Agenda 4G–5G · Investigación de producto</div>
+    <h1>La escuela online y la IA:<br>el panorama y lo que aportamos nosotros</h1>
+    <p class="sub">Dos mitades en un solo documento. Primero, <strong>todo lo que ya existe</strong> en una escuela online (servicios digitales + técnicas de pedagogía). Después, <strong>qué cambia con la IA y dónde está nuestro foso real</strong>: lo que ya hay vs. lo que aportamos vs. lo que se puede aportar.</p>
+    <div class="meta-row">
+      <span>📅 21 jun 2026</span>
+      <span>🎯 Vertical escuela/formación sobre el motor tutor por voz</span>
+      <span>🔁 Mercado e-learning volátil — reverificar antes de decidir</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <a href="#tldr">TL;DR</a>
+    <a href="#servicios">Servicios</a>
+    <a href="#pedagogia">Pedagogía</a>
+    <a href="#ia-marco">Marco IA</a>
+    <a href="#comparativa">Ya hay / Aportamos / Frontera</a>
+    <a href="#riesgos">Dónde la IA no ayuda</a>
+    <a href="#veredicto">Veredicto</a>
+  </div>
+</nav>
+
+<main class="wrap">
+
+  <!-- TL;DR -->
+  <section id="tldr">
+    <div class="card tldr">
+      <h3>TL;DR — la tesis en una frase</h3>
+      <p>La inmensa mayoría de escuelas online vende <strong>transmisión</strong> (vídeo + PDF + test) envuelta en un LMS: <em>commodity</em> replicable en un fin de semana con Teachable/Kajabi. La IA ya <strong>comoditizó la producción</strong> de ese contenido (NotebookLM, Synthesia, Quizlet) y está comoditizando el <strong>chatbot-tutor de texto</strong> (Khanmigo, ChatGPT study mode, Gemini Guided Learning).</p>
+      <p>Lo que <strong>sigue sin resolver — y es nuestro foso —</strong> es el cruce de tres cosas a la vez: <strong>(1)&nbsp;voz en tiempo real + (2)&nbsp;anclada al material del dueño (RAG) con memoria del alumno + (3)&nbsp;dentro de un método con agenda/accountability (4G/5G)</strong>. Cada una por separado existe; las tres juntas y productizadas, no. Ahí apostamos.</p>
+    </div>
+  </section>
+
+  <!-- ============ PARTE 1 ============ -->
+  <h2 class="part">Parte 1 — Lo que había antes (el panorama)</h2>
+
+  <section id="servicios">
+    <h3 class="sec">Servicios digitales de una escuela online</h3>
+    <p>Ocho capas funcionales, de lo más visible a lo invisible. Leyenda de diferenciación conversacional:</p>
+    <div class="legend">
+      <span class="badge b-star">★ foso conversacional (encaja con nuestro motor por voz)</span>
+      <span class="badge b-adj">≈ adyacente</span>
+      <span class="badge b-com">commodity de LMS (sin marca)</span>
+    </div>
+
+    <div class="grid" style="margin-top:16px">
+      <div class="mini">
+        <h4>1 · Contenido y materiales</h4>
+        <ul>
+          <li><b>Vídeo:</b> lección, microvídeo, screencast, pizarra, interactivo <span class="badge b-adj">≈</span>, directo/webinar, 360º/VR <span class="badge b-adj">≈</span>, recaps, subtítulos.</li>
+          <li><b>Texto:</b> apuntes, <b>resúmenes/cheat-sheets</b>, <b>esquemas, mapas conceptuales/mentales, infografías</b>, transcripciones, slides, plantillas, glosario, casos, <b>enlaces curados</b>.</li>
+          <li><b>Audio:</b> podcast, audio-resúmenes, <span class="badge b-star">★ conversación por voz</span>.</li>
+          <li><b>Microestudio:</b> flashcards, quizzes de repaso, píldoras diarias.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>2 · Evaluación y práctica</h4>
+        <ul>
+          <li>Quizzes autocorregibles, exámenes con proctoring, tareas y entregables.</li>
+          <li>Rúbricas, proyectos/capstone/portfolio, peer review <span class="badge b-adj">≈</span>, autoevaluación.</li>
+          <li>Labs/simuladores, simulacros.</li>
+          <li><span class="badge b-star">★</span> Práctica oral / role-play (idiomas, ventas, oposición oral).</li>
+          <li>Certificados, diplomas, badges, micro-credenciales.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>3 · Tutorización e interacción</h4>
+        <ul>
+          <li><span class="badge b-star">★</span> Tutor IA por voz/chat 24/7 anclado al material (RAG).</li>
+          <li>Mentoría/coaching 1:1, office hours, Q&amp;A asíncrono.</li>
+          <li>Corrección personalizada, onboarding guiado, accountability.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>4 · Comunidad y aprendizaje social</h4>
+        <ul>
+          <li>Foros, espacios (Discord/Slack/Circle/Skool), <b>cohortes</b>.</li>
+          <li>Grupos de estudio, accountability partners, eventos en directo (AMA, talleres).</li>
+          <li>Retos/challenges, networking, showcases.</li>
+          <li>Gamificación social (rankings, equipos, insignias), alumni, muro de victorias.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>5 · Personalización y adaptación</h4>
+        <ul>
+          <li>Diagnóstico/nivelación inicial, itinerarios (learning paths).</li>
+          <li>Aprendizaje adaptativo <span class="badge b-adj">≈</span>, recomendador de "siguiente lección".</li>
+          <li>Repetición espaciada programada.</li>
+          <li><span class="badge b-star">★</span> Tutor que recuerda al alumno y ajusta ritmo/tono.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>6 · Gestión, negocio y operación (LMS)</h4>
+        <ul>
+          <li>Matrícula, pagos (único/suscripción/<b>membresía</b>/plazos), drip content, onboarding.</li>
+          <li><span class="badge b-star">★</span> Agenda/calendario del alumno — <em>conecta con Agenda 4G</em>.</li>
+          <li>Notificaciones, email marketing/automatizaciones.</li>
+          <li>Analítica para alumno y <span class="badge b-adj">≈</span> learning analytics para el docente; dashboard de ventas/retención.</li>
+          <li>App móvil + offline, B2B, SCORM/xAPI/LTI, white-label.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>7 · Accesibilidad, inclusión y soporte</h4>
+        <ul>
+          <li>Subtítulos, transcripciones, audiodescripción, lectura fácil.</li>
+          <li><span class="badge b-star">★</span> Multilenguaje/traducción y doblaje/voz en otro idioma.</li>
+          <li>Diseño accesible (WCAG), modo offline/baja-conexión, soporte, bienestar/ritmo.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>8 · Capa de datos e IA transversal</h4>
+        <ul>
+          <li><span class="badge b-star">★</span> RAG sobre el material del dueño (responder solo desde el temario) — <em>nuestro invariante</em>.</li>
+          <li>Generación de resúmenes/quizzes/flashcards/esquemas desde el material.</li>
+          <li>Buscador semántico, detección de lagunas, tutores inteligentes (ITS), predicción de abandono.</li>
+          <li><span class="badge b-star">★</span> Interfaz conversacional / voice-first como acceso a todo lo anterior.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="pedagogia">
+    <h3 class="sec">Técnicas de pedagogía actuales</h3>
+    <p>La capa 1 es el <em>menú</em>; esto es la <em>cocina</em>: los métodos que hacen que algo se aprenda de verdad.</p>
+
+    <div class="grid">
+      <div class="mini">
+        <h4>A · Modelos y enfoques</h4>
+        <ul>
+          <li>Aula invertida, blended, microlearning, mobile learning.</li>
+          <li>Cursos por cohortes (CBC), ABP/PBL, basado en problemas/retos/casos, por competencias.</li>
+          <li><b>Mastery learning (Bloom)</b> — base del "2 sigmas".</li>
+          <li>Colaborativo/cooperativo, social (Bandura), gamificación y game-based.</li>
+          <li>Experiencial (Kolb), descubrimiento, significativo (Ausubel), constructivismo, conectivismo.</li>
+          <li>Andragogía, heutagogía (autodirigido), peer instruction (Mazur), just-in-time, 70-20-10.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>B · Ciencia cognitiva (evidencia fuerte)</h4>
+        <ul>
+          <li><b>Práctica de recuperación / testing effect</b> — la más potente e infrautilizada.</li>
+          <li><b>Repetición espaciada</b> (Ebbinghaus, Anki), <b>interleaving</b>.</li>
+          <li>Elaboración, autoexplicación, doble codificación, worked examples.</li>
+          <li>Carga cognitiva (Sweller), efecto de generación, metacognición.</li>
+          <li>Práctica deliberada (Ericsson), técnica Feynman, chunking, principios de Mayer.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>C · Marcos de diseño instruccional</h4>
+        <ul>
+          <li>Taxonomía de Bloom, ADDIE, SAM, backward design.</li>
+          <li>9 eventos de Gagné, primeros principios de Merrill, modelo 5E.</li>
+          <li>UDL (diseño universal), Comunidad de Indagación (CoI), SAMR, TPACK, Kirkpatrick.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>D · Facilitación y aula</h4>
+        <ul>
+          <li>Andamiaje (scaffolding), modelado, <span class="badge b-star">★ método socrático/mayéutica</span>.</li>
+          <li>Think-pair-share, Jigsaw, debate, role-play, estudio de caso.</li>
+          <li>Exit ticket, muddiest point, KWL, votación en vivo (Kahoot/Mentimeter).</li>
+          <li>Storytelling, Pomodoro, desvanecimiento del apoyo (worked→faded→solo).</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>E · Apuntes y estudio (alumno)</h4>
+        <ul>
+          <li>Cornell, mapas mentales/conceptuales, outline, sketchnoting.</li>
+          <li>Zettelkasten (PKM — Obsidian/Notion), flashcards + Anki.</li>
+          <li>SQ3R/SQ4R, resumen activo, autotest, técnica Feynman.</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h4>F · Evaluación como pedagogía · G · Tendencias</h4>
+        <ul>
+          <li>Formativa vs. sumativa, evaluación auténtica, auto/co/heteroevaluación, rúbricas, <em>assessment for learning</em>.</li>
+          <li><span class="badge b-star">★</span> IA generativa como tutor 1:1, voice-first, ITS adaptativos.</li>
+          <li>VR/AR inmersivo, learning analytics + IA predictiva, generación automática, nudges, PKM+IA, credenciales verificables.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PARTE 2 ============ -->
+  <h2 class="part">Parte 2 — Lo que aportamos de nuevo con la IA</h2>
+
+  <section id="ia-marco">
+    <h3 class="sec">Marco de valoración</h3>
+    <p>No todo lo que la IA toca conviene. Cada capacidad se puntúa por tres ejes, para separar "mola" de "conviene":</p>
+    <div class="chips">
+      <span class="chip c-good">🎯 Impacto en aprendizaje — Alto</span>
+      <span class="chip c-mid">🎯 Medio</span>
+      <span class="chip c-neu">🎯 Bajo</span>
+    </div>
+    <div class="chips">
+      <span class="chip c-good">🏰 Foso para nosotros — Alto / defendible</span>
+      <span class="chip c-mid">🏰 Medio</span>
+      <span class="chip c-bad">🏰 Commodity / replicable con una API</span>
+    </div>
+    <div class="chips">
+      <span class="chip c-good">⚙️ Esfuerzo — Bajo (ya tenemos RAG + Gemini Live)</span>
+      <span class="chip c-mid">⚙️ Medio</span>
+      <span class="chip c-bad">⚙️ Alto</span>
+    </div>
+    <p style="margin-top:14px"><b>La apuesta</b> = Impacto alto × Foso alto × Esfuerzo bajo-medio. Casi siempre cae en lo <b>conversacional</b>.</p>
+    <div class="legend" style="margin-top:14px">
+      <span class="badge b-com">YA HAY = estado del arte hoy, con productos reales</span>
+      <span class="badge b-star">APORTAMOS = lo que AppVoz/4G–5G hace o puede ya</span>
+      <span class="badge" style="background:var(--purple-soft);color:var(--purple);border-color:#ddc9f5">FRONTERA = posible con IA, casi nadie lo ha productizado</span>
+    </div>
+  </section>
+
+  <section id="comparativa">
+    <h3 class="sec">Ya hay · Aportamos · Frontera</h3>
+
+    <!-- 1 -->
+    <div class="areablock">
+      <div class="areahead"><span class="n">1</span><h4>Producción de contenido (vídeo, resúmenes, esquemas, quizzes, flashcards)</h4></div>
+      <div class="cols3">
+        <div class="col col-have"><div class="lab">Ya hay</div><p>Commodity de IA: <b>NotebookLM</b> (resúmenes + audio overview), <b>Synthesia/HeyGen</b> (avatar), <b>ElevenLabs</b> (doblaje), Quizlet/Anki. Producir un curso pasó de meses a días.</p></div>
+        <div class="col col-give"><div class="lab">Aportamos</div><p>Generación <b>desde el corpus RAG del dueño</b> (anclado a <em>su</em> temario, no genérico). Una sola fuente de verdad alimenta tutor + repaso + evaluación.</p></div>
+        <div class="col col-front"><div class="lab">Frontera</div><p>Curso que <b>se auto-genera y auto-mantiene</b>: subes material → lecciones, mapa conceptual, banco de preguntas, flashcards espaciadas, doblaje; se regenera al actualizar.</p></div>
+      </div>
+      <div class="chips"><span class="chip c-mid">🎯 Medio</span><span class="chip c-bad">🏰 Commodity</span><span class="chip c-good">⚙️ Bajo</span></div>
+      <p class="verdict"><b>→</b> Tenerlo "suficientemente bueno", <b>no diferenciar aquí</b>. Cuidado con competir contra NotebookLM en su terreno.</p>
+    </div>
+
+    <!-- 2 -->
+    <div class="areablock">
+      <div class="areahead"><span class="n">2</span><h4>Tutor conversacional (el núcleo)</h4></div>
+      <div class="cols3">
+        <div class="col col-have"><div class="lab">Ya hay</div><p>Chatbots-tutor de <b>texto</b>: Khanmigo, ChatGPT study mode, Gemini Guided Learning, Duolingo Max. Sin voz fluida real ni memoria longitudinal del alumno.</p></div>
+        <div class="col col-give"><div class="lab">Aportamos</div><p><b>Voz en tiempo real</b> (Gemini Live, full-duplex, barge-in) <b>+ anclado al material (RAG por <code>subject_id</code>) + memoria por usuario</b>. "Hablar con un tutor que conoce este temario y a ti".</p></div>
+        <div class="col col-front"><div class="lab">Frontera</div><p>Tutor <b>multimodal</b> que ve tu pantalla/cuaderno, te corrige mientras resuelves, mantiene el hilo entre semanas y <b>escala el "2 sigmas" de Bloom</b>.</p></div>
+      </div>
+      <div class="chips"><span class="chip c-good">🎯 Alto</span><span class="chip c-good">🏰 Alto</span><span class="chip c-good">⚙️ Bajo</span></div>
+      <p class="verdict"><b>→ APUESTA CENTRAL.</b> Lo único que la competencia no tiene junto: voz + tu material + memoria.</p>
+    </div>
+
+    <!-- 3 -->
+    <div class="areablock">
+      <div class="areahead"><span class="n">3</span><h4>Práctica activa y evaluación (recuperación, role-play, feedback)</h4></div>
+      <div class="cols3">
+        <div class="col col-have"><div class="lab">Ya hay</div><p>Autocorrección de tests, corrección de texto con LLM (incipiente), práctica oral solo en idiomas (<b>Speak</b>, <b>Duolingo Video Call</b>). Fuera de idiomas casi no existe.</p></div>
+        <div class="col col-give"><div class="lab">Aportamos</div><p><b>Práctica de recuperación por voz</b> (pregunta → esperas → respondes → corrige) y <b>role-play</b> (vender, atender, oposición oral, entrevista). Feedback en lenguaje natural, no "correcto/incorrecto".</p></div>
+        <div class="col col-front"><div class="lab">Frontera</div><p><b>Evaluación auténtica conversacional</b>: 5 min de charla demuestran dominio (Feynman automatizado — "explícamelo"). Simulaciones con personaje.</p></div>
+      </div>
+      <div class="chips"><span class="chip c-good">🎯 Alto</span><span class="chip c-good">🏰 Alto</span><span class="chip c-mid">⚙️ Medio</span></div>
+      <p class="verdict"><b>→ APUESTA.</b> La pata que convierte "ver contenido" en "aprender", y es nativa de voz.</p>
+    </div>
+
+    <!-- 4 -->
+    <div class="areablock">
+      <div class="areahead"><span class="n">4</span><h4>Personalización y ruta adaptativa</h4></div>
+      <div class="cols3">
+        <div class="col col-have"><div class="lab">Ya hay</div><p>Adaptativo <b>basado en reglas</b> (ALEKS, Knewton) — caro y rígido. La mayoría de cursos: cero adaptación, lineal para todos.</p></div>
+        <div class="col col-give"><div class="lab">Aportamos</div><p>Adaptación <b>en la conversación</b>: detecta dónde flaqueas y ajusta ritmo/ejemplos/profundidad; memoria longitudinal de tus lagunas.</p></div>
+        <div class="col col-front"><div class="lab">Frontera</div><p><b>Itinerario generado y reajustado en vivo</b> desde el material + tu historial; repaso espaciado programado y <em>agendado</em> (ver §6).</p></div>
+      </div>
+      <div class="chips"><span class="chip c-good">🎯 Alto</span><span class="chip c-mid">🏰 Medio-Alto</span><span class="chip c-mid">⚙️ Medio</span></div>
+      <p class="verdict"><b>→ APUESTA secundaria</b>, se apoya en el tutor (§2) y la memoria.</p>
+    </div>
+
+    <!-- 5 -->
+    <div class="areablock">
+      <div class="areahead"><span class="n">5</span><h4>Diagnóstico y detección de lagunas</h4></div>
+      <div class="cols3">
+        <div class="col col-have"><div class="lab">Ya hay</div><p>Test de nivelación inicial (estático). Dashboards de progreso (% completado ≠ aprendido).</p></div>
+        <div class="col col-give"><div class="lab">Aportamos</div><p>El tutor <b>detecta lagunas hablando contigo</b> (lo que no sabes explicar) — diagnóstico continuo, no un examen puntual.</p></div>
+        <div class="col col-front"><div class="lab">Frontera</div><p>Mapa de dominio por alumno en tiempo real; sabe qué concepto está flojo <em>antes</em> que el alumno y programa el repaso.</p></div>
+      </div>
+      <div class="chips"><span class="chip c-mid">🎯 Medio-Alto</span><span class="chip c-mid">🏰 Medio</span><span class="chip c-mid">⚙️ Medio</span></div>
+      <p class="verdict"><b>→</b> Habilitador del adaptativo; no se vende solo, pero potencia §2/§4.</p>
+    </div>
+
+    <!-- 6 -->
+    <div class="areablock">
+      <div class="areahead"><span class="n">6</span><h4>Acompañamiento, accountability y retención (la tesis 5G)</h4></div>
+      <div class="cols3">
+        <div class="col col-have"><div class="lab">Ya hay</div><p>Emails drip, recordatorios push, rachas tipo Duolingo. Nudges sin inteligencia: no saben <em>por qué</em> abandonaste.</p></div>
+        <div class="col col-give"><div class="lab">Aportamos</div><p>El <b>copiloto 5G</b>: del "auto-" al "co-". Te recuerda, te confronta con cariño, <b>agenda el repaso en tu Calendar</b> (Agenda 4G). Ataca el abandono-semana-2, el problema real del e-learning.</p></div>
+        <div class="col col-front"><div class="lab">Frontera</div><p>Agente <b>proactivo</b>: te <b>llama por teléfono</b> (Telnyx + Gemini Live, ya en plan) cuando desapareces, retoma donde lo dejaste y negocia un micro-compromiso.</p></div>
+      </div>
+      <div class="chips"><span class="chip c-good">🎯 Alto</span><span class="chip c-good">🏰 Alto</span><span class="chip c-mid">⚙️ Medio</span></div>
+      <p class="verdict"><b>→ APUESTA diferencial 5G.</b> Lo que ningún LMS ni NotebookLM hace: cruza voz + Calendar + método.</p>
+    </div>
+
+    <!-- 7 -->
+    <div class="areablock">
+      <div class="areahead"><span class="n">7</span><h4>Accesibilidad e idiomas</h4></div>
+      <div class="cols3">
+        <div class="col col-have"><div class="lab">Ya hay</div><p>Subtítulos automáticos, traducción de texto, doblaje IA (HeyGen/ElevenLabs). Maduro.</p></div>
+        <div class="col col-give"><div class="lab">Aportamos</div><p>Tutor que <b>conversa en el idioma del alumno</b> sobre el mismo material; doblaje del curso con voz consistente.</p></div>
+        <div class="col col-front"><div class="lab">Frontera</div><p>Curso en cualquier idioma <b>con la voz del profe clonada</b>; tutor que cambia de idioma a media frase.</p></div>
+      </div>
+      <div class="chips"><span class="chip c-mid">🎯 Medio</span><span class="chip c-mid">🏰 Medio</span><span class="chip c-bad">⚙️ Medio-Alto</span></div>
+      <p class="verdict"><b>→</b> Diferenciador de nicho (clonación aún no en Gemini Live), no prioridad MVP.</p>
+    </div>
+
+    <!-- 8 -->
+    <div class="areablock">
+      <div class="areahead"><span class="n">8</span><h4>Lado del dueño/profesor (creación y operación)</h4></div>
+      <div class="cols3">
+        <div class="col col-have"><div class="lab">Ya hay</div><p>El profe graba/edita/mantiene a mano; o generadores (Sana, Coursebox) que producen genéricos. La "voz del experto" no se captura.</p></div>
+        <div class="col col-give"><div class="lab">Aportamos</div><p>El dueño <b>sube su material → RAG</b> y el tutor responde <em>solo</em> desde ahí ("Eso no está en el material"). Su conocimiento, consultable 24/7 sin él.</p></div>
+        <div class="col col-front"><div class="lab">Frontera</div><p><b>Clonar su forma de enseñar</b> (estilo, analogías, voz); co-creación: el sistema le dice qué falta en su temario según lo que no puede responder.</p></div>
+      </div>
+      <div class="chips"><span class="chip c-mid">🎯 Medio</span><span class="chip c-good">🏰 Alto</span><span class="chip c-good">⚙️ Bajo-Medio</span></div>
+      <p class="verdict"><b>→ Habilitador de foso</b>: el dato del dueño es lo que no se replica con una API.</p>
+    </div>
+
+    <!-- 9 -->
+    <div class="areablock">
+      <div class="areahead"><span class="n">9</span><h4>Comunidad aumentada por IA</h4></div>
+      <div class="cols3">
+        <div class="col col-have"><div class="lab">Ya hay</div><p>Foros, Discord/Skool/Circle. La IA apenas entra (algún bot de FAQ).</p></div>
+        <div class="col col-give"><div class="lab">Aportamos</div><p>Poco hoy; no es nuestro core.</p></div>
+        <div class="col col-front"><div class="lab">Frontera</div><p>IA que resume hilos, responde dudas con el RAG, conecta alumnos afines, detecta a quien va a abandonar y avisa a un mentor humano.</p></div>
+      </div>
+      <div class="chips"><span class="chip c-mid">🎯 Medio</span><span class="chip c-bad">🏰 Bajo</span><span class="chip c-bad">⚙️ Alto</span></div>
+      <p class="verdict"><b>→</b> No prioritario; la comunidad la da cualquier plataforma. No invertir aquí ahora.</p>
+    </div>
+  </section>
+
+  <!-- Riesgos -->
+  <section id="riesgos">
+    <div class="card warn">
+      <h3>Dónde la IA NO ayuda (o resta) — la cara crítica de "valorar"</h3>
+      <ul>
+        <li><b>Vídeo con avatar IA</b> (Synthesia/HeyGen) puede sentirse frío e impersonal; en marca personal/coaching la cara real del experto <em>es</em> el producto. La IA aquí puede destruir confianza.</li>
+        <li><b>Sobre-automatizar el acompañamiento</b> suena a spam sin inteligencia real: los recordatorios genéricos cansan más que motivan.</li>
+        <li><b>Contenido auto-generado sin curar</b> = mediocridad a escala; diluye la autoría que hace valioso a un curso premium.</li>
+        <li><b>Tutor que alucina</b> sobre el material es peor que no tenerlo → el invariante (responder <em>solo</em> desde el RAG, "no está en el material") es innegociable: la confianza se gana siendo fiel al temario, no omnisciente.</li>
+        <li><b>Privacidad/datos del alumno</b>: memoria longitudinal + voz = datos sensibles. Es foso <em>y</em> responsabilidad.</li>
+        <li><b>Riesgo de comoditización</b>: lo que hoy es frontera (§1, §2-texto) será gratis en LMS mañana. El foso real no es "tener IA", es <b>el método + el dato del dueño + la integración (voz+agenda+memoria)</b>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Veredicto -->
+  <section id="veredicto">
+    <h3 class="sec">Veredicto — dónde apostar</h3>
+    <div class="card bet">
+      <h3>Orden de palanca (Impacto × Foso × Esfuerzo)</h3>
+      <table>
+        <thead><tr><th>#</th><th>Apuesta</th><th>🎯</th><th>🏰</th><th>⚙️</th><th>Por qué</th></tr></thead>
+        <tbody>
+          <tr><td><b>1</b></td><td><b>Tutor por voz + RAG + memoria</b> (§2)</td><td><span class="chip c-good">Alto</span></td><td><span class="chip c-good">Alto</span></td><td><span class="chip c-good">Bajo</span></td><td>Ya montado; lo único que nadie junta. El núcleo.</td></tr>
+          <tr><td><b>2</b></td><td><b>Recuperación / role-play por voz</b> (§3)</td><td><span class="chip c-good">Alto</span></td><td><span class="chip c-good">Alto</span></td><td><span class="chip c-mid">Medio</span></td><td>Convierte "consumir" en "aprender"; nativo de voz.</td></tr>
+          <tr><td><b>3</b></td><td><b>Copiloto 5G: accountability + agenda + llamada</b> (§6)</td><td><span class="chip c-good">Alto</span></td><td><span class="chip c-good">Alto</span></td><td><span class="chip c-mid">Medio</span></td><td>Ataca el abandono; cruza voz+Calendar+método. Inimitable.</td></tr>
+          <tr><td><b>4</b></td><td><b>Dato del dueño como foso</b> (§8)</td><td><span class="chip c-mid">Medio</span></td><td><span class="chip c-good">Alto</span></td><td><span class="chip c-good">Bajo</span></td><td>El material propietario + su estilo no se replica con API.</td></tr>
+          <tr><td><b>5</b></td><td>Adaptativo conversacional + repaso agendado (§4/§5)</td><td><span class="chip c-good">Alto</span></td><td><span class="chip c-mid">Medio</span></td><td><span class="chip c-mid">Medio</span></td><td>Se apoya en 1–3; multiplica el efecto.</td></tr>
+          <tr><td>—</td><td>Producción de contenido (§1), comunidad (§9), idiomas (§7)</td><td>—</td><td><span class="chip c-bad">Bajo/Comm.</span></td><td>—</td><td>Tenerlo "suficiente"; no diferenciar ni invertir foso aquí.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="closer">
+      <b>Frase de cierre:</b> la IA hizo barato <b>fabricar</b> la escuela online (contenido) y <b>empezó</b> a hacer barato el chatbot-tutor. Lo que <b>no</b> ha hecho barato —y es exactamente lo que tenemos— es un <b>tutor que te habla, conoce tu material, te recuerda y te acompaña con una agenda</b>. Las apuestas 1–4 son ese cruce. Todo lo demás: comprarlo, integrarlo o tenerlo "suficientemente bueno", nunca como diferenciador.
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="pill">AppVoz</span><span class="pill">Agenda 4G–5G</span><span class="pill">Investigación de producto</span>
+    <p>Síntesis del modelo (cutoff ene-2026) + organización canónica. Nombres de producto reales a jun-2026; el mercado e-learning cambia rápido — reverificar precios/herramientas antes de citar o decidir. Documentos fuente: <em>escuela-online-servicios-y-pedagogia.md</em> y <em>escuela-online-valoracion-IA.md</em>.</p>
+  </div>
+</footer>
+
+</body>
+</html>
