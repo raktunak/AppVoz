@@ -125,7 +125,12 @@ def _preparar_prompt(cfg: dict, fecha_str: str, canva: dict) -> dict:
             "\n\nLO QUE ESTA PERSONA YA TE HA CONTADO (para dar continuidad; NO lo repreguntes):\n"
             + resumen
         )
-    return {**cfg, "system_instruction": base + extra}
+    out = {**cfg, "system_instruction": base + extra}
+    # 4g: conducción guiada y DETERMINISTA — temperatura baja para que Faro improvise menos, no
+    # invente datos y no se adelante de apartado (si el panel ya fija una, se respeta).
+    if out.get("temperature") in (None, ""):
+        out["temperature"] = 0.3
+    return out
 
 
 def _valores_seccion(seccion: dict, datos: dict | None) -> str:
@@ -165,8 +170,12 @@ def _instruccion_seccion(seccion: dict, arranque: bool, reanuda: bool, datos: di
         f"AHORA estás en la parte «{seccion['titulo']}». {saludo} Haz estas preguntas, UNA A UNA y "
         f"TAL CUAL (palabra por palabra, sin reformular ni inventar otras, sin adelantar las "
         f"siguientes), esperando la respuesta a cada una antes de la próxima: {lista} "
+        f"Consigue una respuesta REAL a CADA pregunta: si la persona responde otra cosa (p. ej. te "
+        f"da su nombre cuando preguntas por el tiempo) o no la contesta, vuelve a hacer ESA MISMA "
+        f"pregunta; NUNCA des por bueno ni te INVENTES un dato que no haya dicho con claridad. "
         f"Acoge cada respuesta con naturalidad pero NO la confirmes con '¿correcto?' ni encadenes "
-        f"otra pregunta sin esperar. Cuando tengas TODAS las respuestas, ESPERA mi indicación para "
+        f"otra pregunta sin esperar. No empieces, no menciones ni te adelantes al apartado SIGUIENTE "
+        f"bajo ninguna circunstancia. Cuando tengas TODAS las respuestas, ESPERA mi indicación para "
         f"recapitular y proponer seguir; no recapitules ni propongas avanzar por tu cuenta."
     )
 
@@ -215,6 +224,7 @@ async def _pedir_confirmacion(ws: WebSocket, shared: dict, idx: int) -> None:
     txt = _guion_confirmacion(seccion, recap, siguiente, minutos)
     shared["_await_confirm"] = True
     shared["_conv_confirm"] = len(shared.get("conv", ""))
+    shared["_hablo_tras_recap"] = False   # el watchdog solo repregunta si NO has hablado tras el recap
     shared["bot_speaking"] = True
     try:
         await ses.send_client_content(
@@ -282,6 +292,7 @@ class _Vad:
                 logger.info(f"[4g VAD] turno ABIERTO peak={peak} need={need}")   # TEMP
                 await session.send_realtime_input(activity_start=types.ActivityStart())
                 self.in_speech, self.sil, self.hot = True, 0, 0
+                shared["_hablo_tras_recap"] = True   # has intervenido: el watchdog NO debe repreguntar
                 self.turn = bytearray()
                 for buf in list(self.prefix)[-need:]:           # vuelca el preludio: no se clipa
                     self.turn += buf
@@ -316,21 +327,54 @@ def _siguiente_pendiente(canva: dict, desde: int) -> int | None:
     return None
 
 
+async def _invitar_a_seguir(ws: WebSocket, shared: dict, idx: int) -> None:
+    """El bloque está COMPLETO: lo marca ✓ e INVITA a la persona a pulsar el siguiente cuando quiera.
+    NO auto-avanza: la transición la dispara el USUARIO con el botón. Se llama una sola vez por bloque."""
+    seccion = canva4g.SECCIONES[idx]
+    key = seccion["key"]
+    try:
+        await ws.send_text(json.dumps({"type": "section_done", "idx": idx, "key": key}))
+    except Exception:
+        pass
+    nxt = _siguiente_pendiente(shared["canva"], idx)
+    siguiente = canva4g.SECCIONES[nxt]["titulo"] if nxt is not None else None
+    logger.info(f"[4g] '{key}' completo → invito a seguir (siguiente={siguiente})")
+    ses = shared.get("session")
+    if ses is None:
+        return
+    if siguiente:
+        txt = (f"(Ya tienes todo lo de «{seccion['titulo']}». Dile a la persona, en UNA frase breve y "
+               f"cálida, que cuando quiera puede pulsar «{siguiente}» para continuar. NO empieces tú esa "
+               f"parte ni hagas más preguntas: solo invítale y quédate a la espera.)")
+    else:
+        txt = ("(Habéis completado TODO el Canva. Felicítale en una frase y dile que su Plataforma "
+               "Estratégica Personal ya está lista. No hagas más preguntas.)")
+    shared["bot_speaking"] = True
+    try:
+        await ses.send_client_content(
+            turns=[types.Content(role="user", parts=[types.Part(text=txt)])],
+            turn_complete=True,
+        )
+    except Exception:
+        logger.exception("[4g] no pude invitar a seguir")
+
+
 async def _extraer_y_push(ws: WebSocket, shared: dict, idx: int):
-    """Extrae la sección `idx`, actualiza el Canva y lo empuja al navegador. Cuando los datos están
-    completos pide CONFIRMACIÓN al usuario (recap + invitación) y solo al confirmar marca
-    `section_done`, fija el auto-avance y cierra la sesión. Best-effort."""
+    """Extrae el apartado `idx`, actualiza el Canva en vivo y, cuando queda COMPLETO (tras una
+    intervención del usuario), invita UNA vez a pasar al siguiente. SIN auto-avance: la transición la
+    decide el usuario pulsando el botón del siguiente bloque. Best-effort."""
     if idx >= len(canva4g.SECCIONES):
         return
     if shared.get("sec_idx") != idx:
         return   # tarea obsoleta: la sección activa ya cambió (no contaminar a la nueva)
     seccion = canva4g.SECCIONES[idx]
+    key = seccion["key"]
     conv = shared.get("conv", "")
     if not conv.strip():
         return
-    # STT fiable de respaldo (C): transcribe el audio del último turno en español; corrige la
-    # burbuja del chat y se lo pasa al extractor como fuente prioritaria.
     audio_turno = shared.pop("_turno_audio", None)
+
+    # STT fiable de respaldo (español) del último turno: corrige la burbuja y prioriza la extracción.
     stt_fiable = await canva4g.transcribir_audio(audio_turno) if audio_turno else ""
     if stt_fiable:
         logger.info(f"[4g] STT fiable: «{stt_fiable}»")
@@ -338,13 +382,11 @@ async def _extraer_y_push(ws: WebSocket, shared: dict, idx: int):
             await ws.send_text(json.dumps({"type": "user_fix", "text": stt_fiable}))
         except Exception:
             pass
-    datos = await canva4g.extraer_seccion(seccion["key"], conv, shared["fecha_str"], stt_fiable)
+    datos = await canva4g.extraer_seccion(key, conv, shared["fecha_str"], stt_fiable)
     if not datos:
         return
-    key = seccion["key"]
-    prev = shared["canva"].get(key) or {}
-    shared["canva"][key] = canva4g.merge_seccion(seccion, prev, datos)
-    logger.info(f"[4g] extracción '{key}' -> {datos}")
+    shared["canva"][key] = canva4g.merge_seccion(seccion, shared["canva"].get(key) or {}, datos)
+    logger.info(f"[4g] extracción '{key}' -> {shared['canva'].get(key)}")
     try:
         await ws.send_text(json.dumps({"type": "canva", "canva": shared["canva"]}))
     except Exception:
@@ -353,42 +395,15 @@ async def _extraer_y_push(ws: WebSocket, shared: dict, idx: int):
         await canva4g.guardar_canva(shared["user_id"], shared["canva"], shared["subject_id"])
     except Exception:
         logger.exception("[4g] no pude guardar canva (incremental)")
-    if shared.get("_done_sec") or shared.get("sec_idx") != idx:
-        return   # ya confirmada/avanzando, o la sección cambió mientras se extraía (tarea obsoleta)
-    completa = canva4g.seccion_completa(seccion, shared["canva"].get(key))
-
-    # ESTADO 2 — esperando que el usuario confirme/corrija tras la recapitulación.
-    if shared.get("_await_confirm"):
-        respuesta = conv[shared.get("_conv_confirm", 0):]
-        if "Persona:" not in respuesta:
-            return   # aún no ha respondido el usuario a la confirmación (solo está el recap de Faro)
-        intent = await canva4g.clasificar_intencion(respuesta)
-        logger.info(f"[4g] confirmación '{key}': intención={intent}")
-        if intent == "confirma" and completa:
-            shared["_done_sec"] = True
-            shared["_await_confirm"] = False
-            if key == "bloque":
-                await _agendar_bloque(ws, shared)
-            try:
-                await ws.send_text(json.dumps({"type": "section_done", "idx": idx, "key": key}))
-            except Exception:
-                pass
-            shared["_advance"] = _siguiente_pendiente(shared["canva"], idx)
-            logger.info(f"[4g] '{key}' CONFIRMADA por el usuario → siguiente={shared['_advance']}")
-            ev = shared.get("stop_event")
-            if ev is not None and not ev.is_set():
-                ev.set()
-        elif intent == "corrige" and completa:
-            await _pedir_confirmacion(ws, shared, idx)     # re-recapitula con el dato ya corregido
-        elif intent == "corrige":
-            shared["_await_confirm"] = False               # falta algún dato: Faro lo vuelve a pedir
-        # rechaza | ambiguo → seguimos esperando; Faro mantiene la conversación
+    if shared.get("sec_idx") != idx:
         return
-
-    # ESTADO 1 — datos completos → invitar a seguir, pero SOLO tras una intervención del usuario en
-    # esta sección (si no, una sección reabierta ya completa dispararía la invitación en el saludo).
-    if completa and "Persona:" in conv:
-        await _pedir_confirmacion(ws, shared, idx)
+    # COMPLETO + el usuario ya ha intervenido + aún no invitado → marcar ✓ e INVITAR (una sola vez).
+    if (canva4g.seccion_completa(seccion, shared["canva"].get(key))
+            and "Persona:" in conv and not shared.get("_invitado")):
+        shared["_invitado"] = True
+        if key == "bloque":
+            await _agendar_bloque(ws, shared)
+        await _invitar_a_seguir(ws, shared, idx)
 
 
 async def _agendar_bloque(ws: WebSocket, shared: dict):
@@ -468,40 +483,6 @@ async def _gemini_to_browser_4g(ws: WebSocket, session, shared: dict):
         logger.exception("[4g] gemini->browser ERROR")
 
 
-async def _watchdog_confirmacion(session, shared: dict) -> None:
-    """Red de seguridad de la fase de confirmación: si el usuario no responde al recap, Faro
-    REPREGUNTA en vez de quedarse callado (lo que dejaría a la sesión native-audio sin input y
-    Vertex la cerraría por inactividad). Repreguntar cuenta como input → además resetea ese timeout.
-    Reintenta un par de veces; con el VAD ya sensible al sí/no (need=1) esto rara vez hará falta."""
-    intentos = 0
-    try:
-        while shared.get("session") is session:
-            await asyncio.sleep(7)
-            if shared.get("session") is not session:
-                return
-            vo = shared.get("vad_obj")
-            esperando = (shared.get("_await_confirm") and not shared.get("bot_speaking")
-                         and not (vo is not None and vo.in_speech))
-            if not esperando:
-                intentos = 0                # confirmó, corrige o está hablando → reinicia la cuenta
-                continue
-            if intentos >= 2:
-                continue                    # ya insistí; no repreguntar en bucle infinito
-            intentos += 1
-            logger.info(f"[4g] watchdog: sin confirmación; Faro repregunta (intento {intentos})")
-            shared["bot_speaking"] = True
-            await session.send_client_content(
-                turns=[types.Content(role="user", parts=[types.Part(text=(
-                    "El usuario no ha respondido. Vuelve a invitarle MUY brevemente a continuar: "
-                    "que diga «sí» para seguir o «no» para quedarse en este apartado."))])],
-                turn_complete=True,
-            )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("[4g] watchdog confirmación ERROR")
-
-
 # --------------------------------------------------------------------------- #
 # Ciclo de vida de una sección: cada una es su propia sesión Gemini.
 # --------------------------------------------------------------------------- #
@@ -528,23 +509,18 @@ async def _run_section(ws: WebSocket, shared: dict, vad: dict, idx: int):
             shared["conv"] = ""
             shared["_last"] = None
             shared["bot_speaking"] = False
-            shared["_await_confirm"] = False
-            shared["_conv_confirm"] = 0
-            # Arranca SIEMPRE como no-completada (aunque la sección ya tuviera datos, p.ej. al
-            # reabrir/reanudar): si no, el flag cortaría la confirmación/avance. La invitación se
-            # dispara solo tras la primera intervención del usuario en la sección (guard en _extraer_y_push).
-            shared["_done_sec"] = False
+            # Aún no hemos invitado a seguir en este bloque (la invitación se dispara UNA vez, cuando
+            # el bloque queda completo tras la primera intervención del usuario — guard en _extraer_y_push).
+            shared["_invitado"] = False
             shared["presentado"] = True
             await ws.send_text(json.dumps({
                 "type": "section_started", "idx": idx, "key": seccion["key"]}))
             down = asyncio.create_task(_gemini_to_browser_4g(ws, session, shared))
             await _disparar(session, shared)   # turno inicial mínimo y entre paréntesis
             waiter = asyncio.create_task(shared["stop_event"].wait())
-            wd = asyncio.create_task(_watchdog_confirmacion(session, shared))  # repregunta si no confirmas
             _, pending = await asyncio.wait({down, waiter}, return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
                 t.cancel()
-            wd.cancel()   # el watchdog no termina la sección; se cancela al cerrarla
     except Exception:
         logger.exception(f"[4g] _run_section idx={idx} error")
     finally:
@@ -559,15 +535,8 @@ async def _run_section(ws: WebSocket, shared: dict, vad: dict, idx: int):
             await canva4g.guardar_canva(shared["user_id"], shared["canva"], shared["subject_id"])
         except Exception:
             logger.exception("[4g] no pude guardar canva al cerrar sección")
-        # Auto-avance: si esta sección se cerró por COMPLETARSE (no por acción del usuario), abrir
-        # la siguiente pendiente. Guardas: no pisar un cierre manual (`_detaining`) ni una tarea ya
-        # reemplazada por un inicio manual (`section_task is current_task`).
-        nxt = shared.pop("_advance", None)
-        if (nxt is not None and not shared.get("_detaining")
-                and shared.get("section_task") is asyncio.current_task()):
-            shared["stop_event"] = asyncio.Event()
-            shared["section_task"] = asyncio.create_task(_run_section(ws, shared, vad, nxt))
-            logger.info(f"[4g] auto-avance → sección idx={nxt}")
+        # SIN auto-avance: la transición entre bloques la dispara el USUARIO (pulsando el siguiente,
+        # que manda start_section → _iniciar_seccion). Aquí solo cerramos limpio el bloque actual.
 
 
 async def _detener_seccion(shared: dict):
@@ -643,6 +612,12 @@ async def ws_4g(ws: WebSocket):
     fecha_str = _fecha_ctx()
     canva_prev = await canva4g.obtener_canva(user_id)
     vad = _vad_params(cfg_base)
+    # 4g: VAD MÁS sensible que /call — el usuario da respuestas cortas y aisladas, y el camino con
+    # native-audio se queda mudo si no abrimos turno. Basta 1 frame fuerte para abrir (no 2) y bajamos
+    # el umbral (el ruido de fondo medido ~70-545 queda muy por debajo, apenas hay falsos positivos).
+    vad["start_frames"] = 1
+    vad["open_peak"] = min(vad["open_peak"], 1000)
+    vad["keep_peak"] = max(int(vad["open_peak"] * 0.5), 500)
     shared = {
         "user_id": user_id, "subject_id": subject_id, "cfg_base": cfg_base,
         "fecha_str": fecha_str, "canva": canva_prev or {},

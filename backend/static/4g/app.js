@@ -228,10 +228,10 @@ function handleMsg(j) {
       if (ACTIVE === j.idx) ACTIVE = -1;
       flushPlayback(); renderStepper(); renderCanva(); curWho = null; curBubble = null;
       break;
-    case "section_done":   // el backend abre solo la siguiente sección (auto-avance); el front reacciona
+    case "section_done":   // el bloque queda completo (✓); el avance al siguiente lo decide el usuario
       DONE.add(j.key); renderStepper(); renderCanva();
       if (DONE.size >= SECCIONES.length) setStatus("✓ ¡Onboarding completo! Tu Canva está listo.");
-      else setStatus("✓ «" + tituloDe(j.idx) + "» completada — seguimos…");
+      else setStatus("✓ «" + tituloDe(j.idx) + "» lista — pulsa el siguiente bloque cuando quieras.");
       break;
     case "canva": CANVA = j.canva || CANVA; renderCanva(); break;
     case "booked": BOOKED = j; renderCanva(); break;
