@@ -260,7 +260,16 @@ class _Vad:
             if shared.get("no_barge") and shared.get("bot_speaking"):
                 self.hot = 0
                 return
-            need = self.barge_frames if shared.get("bot_speaking") else self.start_frames
+            # Frames de voz sostenida para ABRIR turno. En la fase de confirmación esperamos una
+            # respuesta CORTA (sí/no) y basta UN frame: un "sí" de ~150ms no junta 2 frames y se
+            # perdía. Falsos positivos baratos: el recap + clasificar_intencion descartan lo que no
+            # sea sí/no, y abrir aunque sea por ruido cuenta como input → no deja morir la sesión.
+            if shared.get("bot_speaking"):
+                need = self.barge_frames
+            elif shared.get("_await_confirm"):
+                need = 1
+            else:
+                need = self.start_frames
             self.hot = min(need, self.hot + 1) if peak >= self.open_peak else max(0, self.hot - 1)
             self._dbg_max = max(getattr(self, "_dbg_max", 0), peak)   # TEMP diagnóstico VAD
             self._dbg_n = getattr(self, "_dbg_n", 0) + 1
@@ -459,6 +468,40 @@ async def _gemini_to_browser_4g(ws: WebSocket, session, shared: dict):
         logger.exception("[4g] gemini->browser ERROR")
 
 
+async def _watchdog_confirmacion(session, shared: dict) -> None:
+    """Red de seguridad de la fase de confirmación: si el usuario no responde al recap, Faro
+    REPREGUNTA en vez de quedarse callado (lo que dejaría a la sesión native-audio sin input y
+    Vertex la cerraría por inactividad). Repreguntar cuenta como input → además resetea ese timeout.
+    Reintenta un par de veces; con el VAD ya sensible al sí/no (need=1) esto rara vez hará falta."""
+    intentos = 0
+    try:
+        while shared.get("session") is session:
+            await asyncio.sleep(7)
+            if shared.get("session") is not session:
+                return
+            vo = shared.get("vad_obj")
+            esperando = (shared.get("_await_confirm") and not shared.get("bot_speaking")
+                         and not (vo is not None and vo.in_speech))
+            if not esperando:
+                intentos = 0                # confirmó, corrige o está hablando → reinicia la cuenta
+                continue
+            if intentos >= 2:
+                continue                    # ya insistí; no repreguntar en bucle infinito
+            intentos += 1
+            logger.info(f"[4g] watchdog: sin confirmación; Faro repregunta (intento {intentos})")
+            shared["bot_speaking"] = True
+            await session.send_client_content(
+                turns=[types.Content(role="user", parts=[types.Part(text=(
+                    "El usuario no ha respondido. Vuelve a invitarle MUY brevemente a continuar: "
+                    "que diga «sí» para seguir o «no» para quedarse en este apartado."))])],
+                turn_complete=True,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("[4g] watchdog confirmación ERROR")
+
+
 # --------------------------------------------------------------------------- #
 # Ciclo de vida de una sección: cada una es su propia sesión Gemini.
 # --------------------------------------------------------------------------- #
@@ -497,9 +540,11 @@ async def _run_section(ws: WebSocket, shared: dict, vad: dict, idx: int):
             down = asyncio.create_task(_gemini_to_browser_4g(ws, session, shared))
             await _disparar(session, shared)   # turno inicial mínimo y entre paréntesis
             waiter = asyncio.create_task(shared["stop_event"].wait())
+            wd = asyncio.create_task(_watchdog_confirmacion(session, shared))  # repregunta si no confirmas
             _, pending = await asyncio.wait({down, waiter}, return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
                 t.cancel()
+            wd.cancel()   # el watchdog no termina la sección; se cancela al cerrarla
     except Exception:
         logger.exception(f"[4g] _run_section idx={idx} error")
     finally:

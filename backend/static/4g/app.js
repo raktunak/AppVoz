@@ -260,9 +260,11 @@ async function ensureMic() {
   const silent = micCtx.createGain(); silent.gain.value = 0;
   micNode.onaudioprocess = (e) => {
     if (!ws || ws.readyState !== 1) return;
-    // Anti-eco: no enviar el micro mientras Faro está SONANDO (incluida la cola hasta nextTime),
-    // para que su propio audio por el altavoz no abra turno ni le interrumpa.
-    if (playCtx && playCtx.currentTime < nextTime + 0.15) return;
+    // Anti-eco: no enviar el micro mientras Faro está SONANDO (cola hasta nextTime), para que su
+    // propio audio por el altavoz no abra turno ni le interrumpa. El margen tras acabar es PEQUEÑO
+    // (~60ms) para no comerse el arranque de una respuesta rápida ("sí"/"no") justo tras el recap;
+    // el eco residual lo cubre el echoCancellation del micro (ensureMic) + el gate de servidor.
+    if (playCtx && playCtx.currentTime < nextTime + 0.06) return;
     const ds = downsample(e.inputBuffer.getChannelData(0), micCtx.sampleRate, 16000);
     ws.send(toPCM16(ds));
   };
