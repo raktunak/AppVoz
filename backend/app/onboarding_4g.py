@@ -99,6 +99,14 @@ async def _inyectar_agente(session, shared: dict, idx: int) -> None:
     # si no se ha tocado, el guion por defecto = las preguntas literales del bloque.
     guion = (shared.get("_guion_custom", {}).get(idx) or "").strip() or _guion_agente(seccion)
     resumen = canva4g.resumen_canva(shared.get("canva"))
+    # Si se RETOMA un apartado a medias (pausado), decimos QUÉ ya tiene para que pregunte solo lo que falta.
+    datos = shared.get("canva", {}).get(seccion["key"]) or {}
+    if seccion.get("tipo") == "lista":
+        _arr = datos.get(seccion["lista"]) or []
+        capturado = "; ".join((x.get("valor") or x.get("nombre") or "") for x in _arr if isinstance(x, dict))
+    else:
+        capturado = "; ".join(f"{a['etiqueta']}: {datos[a['campo']]}"
+                              for a in seccion.get("apartados", []) if datos.get(a["campo"]))
     if not shared.get("presentado"):
         apertura = "Es el COMIENZO: preséntate en UNA sola frase como Faro, la guía."
         shared["presentado"] = True
@@ -110,6 +118,9 @@ async def _inyectar_agente(session, shared: dict, idx: int) -> None:
     partes.append(
         f"Haz estas preguntas, una a una y TAL CUAL (palabra por palabra), esperando respuesta a cada "
         f"una antes de la siguiente: {guion}")
+    if capturado:
+        partes.append(f"De ESTE apartado la persona YA te dio: {capturado}. NO lo repreguntes; "
+                      f"continúa pidiendo SOLO lo que falte.")
     partes.append("Cuando tengas TODAS esas respuestas, NO sigas con otra fase ni preguntes más: "
                   "invita a la persona a pulsar el siguiente apartado cuando quiera, y espera.)")
     shared["bot_speaking"] = True
@@ -164,8 +175,8 @@ async def _control_4g(data: dict, session, shared: dict) -> None:
     if guion:
         shared.setdefault("_guion_custom", {})[idx] = guion
     shared["sec_idx"] = idx
-    shared.setdefault("_firma", {}).pop(canva4g.SECCIONES[idx]["key"], None)   # re-evaluar limpio
-    shared.get("_invitado", set()).discard(canva4g.SECCIONES[idx]["key"])
+    shared["_hablo_en_bloque"] = False   # al (re)abrir el bloque, aún no ha hablado el usuario en él
+    shared.get("_invitado", set()).discard(canva4g.SECCIONES[idx]["key"])   # permite re-cerrar al recompletar
     await _inyectar_agente(session, shared, idx)
 
 
@@ -210,27 +221,24 @@ async def _extraer_y_push(ws: WebSocket, shared: dict):
     # turno (saludo/ruido, p.ej. tomar "gan" como nombre) y se da margen a que la guía confirme.
     key = seccion["key"]
     cur = shared["canva"].get(key)
-    firmas = shared.setdefault("_firma", {})
     invitados = shared.setdefault("_invitado", set())
-    if canva4g.seccion_completa(seccion, cur):
-        firma = _firma_oblig(seccion, cur)
-        if firmas.get(key) == firma:                      # estable → completa de verdad
-            if key == "bloque":
-                await _agendar_bloque(ws, shared)
-            if key not in invitados:                      # SIN auto-avance: invitar UNA vez y CERRAR.
-                invitados.add(key)                        # El usuario inicia el siguiente con su botón.
-                logger.info(f"[4g] sección '{key}' COMPLETA → invito a seguir y cierro el bloque")
-                await _invitar_siguiente(shared.get("session"), shared, idx)
-                try:   # el navegador deja de escuchar este bloque (se cierra solo); el usuario abre el siguiente
-                    await ws.send_text(json.dumps({"type": "cerrado", "key": key, "idx": idx}))
-                except Exception:
-                    pass
-        else:                                             # 1ª vez completa: espera 2ª (estabilidad)
-            firmas[key] = firma
-            logger.info(f"[4g] sección '{key}' completa; espero 2ª (estabilidad)")
-    else:
-        firmas.pop(key, None)                             # dejó de estar completa → reset
-        invitados.discard(key)
+    # Cerrar el bloque EN CUANTO está completo Y el usuario ha intervenido desde que se abrió (flag
+    # `_hablo_en_bloque`, reseteado al abrir en _control_4g). Antes exigíamos una 2ª extracción
+    # "estable", lo que retrasaba el cierre y dejaba a Faro hablando tras tener ya los datos.
+    if (canva4g.seccion_completa(seccion, cur)
+            and shared.get("_hablo_en_bloque")
+            and key not in invitados):
+        invitados.add(key)                                # SIN auto-avance: invitar UNA vez y CERRAR.
+        if key == "bloque":
+            await _agendar_bloque(ws, shared)
+        logger.info(f"[4g] sección '{key}' COMPLETA → invito a seguir y cierro el bloque")
+        await _invitar_siguiente(shared.get("session"), shared, idx)
+        try:   # el navegador deja de escuchar este bloque (se cierra solo); el usuario abre el siguiente
+            await ws.send_text(json.dumps({"type": "cerrado", "key": key, "idx": idx}))
+        except Exception:
+            pass
+    elif not canva4g.seccion_completa(seccion, cur):
+        invitados.discard(key)                            # dejó de estar completa → podrá re-cerrar luego
 
 
 async def _agendar_bloque(ws: WebSocket, shared: dict):
@@ -292,6 +300,7 @@ async def _gemini_to_browser_4g(ws: WebSocket, session, shared: dict):
                             await ws.send_bytes(inline.data)
                 it = getattr(sc, "input_transcription", None)
                 if it and getattr(it, "text", None):
+                    shared["_hablo_en_bloque"] = True   # el usuario ha intervenido en el bloque activo
                     if shared.get("_last") != "user":
                         shared["conv"] = shared.get("conv", "") + "\nPersona: "
                         shared["_last"] = "user"

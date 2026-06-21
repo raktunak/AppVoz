@@ -173,23 +173,33 @@ function promptBox(s) {
   det.appendChild(lblR); det.appendChild(ref);
   return det;
 }
+function hayDatos(s) {   // ¿el bloque tiene ALGO capturado (a medias) aunque no esté completo?
+  const d = CANVA[s.key]; if (!d) return false;
+  if (s.tipo === "lista") return ((d[s.lista] || []).length > 0);
+  return (s.apartados || []).some((a) => d[a.campo]);
+}
 function renderCanva() {
   const grid = $("grid"); grid.innerHTML = "";
   let firstPending = SECCIONES.findIndex((s) => !DONE.has(s.key));
   if (firstPending < 0) firstPending = SECCIONES.length;   // todo hecho
   SECCIONES.forEach((s, i) => {
     const done = DONE.has(s.key);
-    const enCurso = (i === ACTIVA && !done);   // 'done' manda: un bloque completo NO sigue «En curso»
+    const enCurso = (i === ACTIVA && !done);   // 'done' manda: un bloque completo NO sigue activo
     const habilitado = done || enCurso || i === firstPending;   // ORDEN: solo el actual o repasar hechos
     const card = document.createElement("div");
     card.className = "cv" + (enCurso ? " active" : "") + (done ? " done" : "") + (habilitado ? "" : " locked");
     const head = document.createElement("div"); head.className = "cv-head";
     const h = document.createElement("h3"); h.textContent = s.titulo;
     const btn = document.createElement("button");
-    btn.className = "go" + (done ? " is-done" : (enCurso ? " on" : ""));
-    btn.textContent = done ? "✓ Repasar" : (enCurso ? "● En curso" : "▶ Empezar");
+    // Estados: completo → ✓ Repasar · en curso → ■ Pausar · a medias → ▶ Seguir · vacío → ▶ Empezar
+    let txt = "▶ Empezar", cls = "", onclick = () => iniciarBloque(i);
+    if (done) { txt = "✓ Repasar"; cls = " is-done"; }
+    else if (enCurso) { txt = "■ Pausar"; cls = " pausar"; onclick = () => pausar(); }
+    else if (hayDatos(s)) { txt = "▶ Seguir"; cls = " seguir"; }
+    btn.className = "go" + cls;
+    btn.textContent = txt;
     btn.disabled = !habilitado;
-    if (habilitado) btn.onclick = () => iniciarBloque(i);
+    if (habilitado) btn.onclick = onclick;
     head.appendChild(h); head.appendChild(btn);
     card.appendChild(head);
     renderSeccion(card, s, CANVA[s.key]);
@@ -284,6 +294,14 @@ function stop() {
   micNode = micStream = micCtx = null; ws = null; ACTIVA = -1;
   renderStepper(); renderCanva();
   setStatus("Sesión finalizada. Tu Canva queda guardado.");
+}
+
+// Pausar el apartado en curso SIN completarlo: cierra la escucha (los datos ya se guardan cada turno);
+// el bloque queda «a medias» → botón «▶ Seguir», y al retomarlo el agente pregunta solo lo que falta.
+function pausar() {
+  const s = SECCIONES[ACTIVA];
+  stop();
+  setStatus("⏸ «" + (s ? s.titulo : "Apartado") + "» en pausa — pulsa «▶ Seguir» cuando quieras retomarlo.");
 }
 
 // Reiniciar desde cero (para pruebas): borra el Canva del usuario y sus citas de prueba.
