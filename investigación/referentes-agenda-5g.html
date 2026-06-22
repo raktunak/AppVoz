@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Referentes de mercado — Agenda 5ª Generación | AppVoz</title>
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Roboto', sans-serif;
+    background: #fff;
+    color: #202124;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Header ── */
+  .header {
+    padding: 24px 40px 0;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .header h1 {
+    font-family: 'Google Sans', sans-serif;
+    font-size: 28px;
+    font-weight: 400;
+    color: #202124;
+    letter-spacing: -0.25px;
+  }
+  .header .meta {
+    font-size: 13px;
+    color: #70757a;
+    margin-top: 4px;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px 40px 64px;
+  }
+
+  /* ── Tesis callout ── */
+  .thesis-callout {
+    background: #e8f0fe;
+    border-radius: 16px;
+    padding: 24px 32px;
+    margin-bottom: 40px;
+    border-left: 4px solid #1a73e8;
+  }
+  .thesis-callout h3 {
+    font-family: 'Google Sans', sans-serif;
+    font-size: 18px;
+    font-weight: 400;
+    color: #1a73e8;
+    margin-bottom: 12px;
+  }
+  .thesis-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .thesis-item {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+    font-size: 14px;
+  }
+  .thesis-item .num {
+    font-family: 'Google Sans', sans-serif;
+    font-size: 24px;
+    color: #1a73e8;
+    font-weight: 500;
+  }
+  .thesis-item .label {
+    font-size: 13px;
+    color: #5f6368;
+    margin-top: 4px;
+  }
+  .foso {
+    margin-top: 16px;
+    padding: 12px 16px;
+    background: #fef7e0;
+    border-radius: 8px;
+    font-size: 14px;
+    color: #5f6368;
+    text-align: center;
+  }
+  .foso strong { color: #e37400; }
+
+  /* ── Section titles ── */
+  .section-title {
+    font-family: 'Google Sans', sans-serif;
+    font-size: 22px;
+    font-weight: 400;
+    color: #202124;
+    margin: 48px 0 24px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e8eaed;
+  }
+
+  /* ── Competitor card ── */
+  .competitor {
+    background: #f8f9fa;
+    border: 1px solid #e8eaed;
+    border-radius: 16px;
+    padding: 28px 32px;
+    margin-bottom: 24px;
+  }
+  .competitor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+  }
+  .competitor-header h3 {
+    font-family: 'Google Sans', sans-serif;
+    font-size: 20px;
+    font-weight: 400;
+    color: #202124;
+  }
+  .competitor-header .url {
+    font-size: 13px;
+    color: #1a0dab;
+  }
+  .competitor-header .url a {
+    color: #1a0dab;
+    text-decoration: none;
+  }
+  .competitor-header .url a:hover { text-decoration: underline; }
+  .competitor-meta {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .meta-tag {
+    font-size: 12px;
+    background: #e8eaed;
+    color: #5f6368;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-weight: 500;
+  }
+  .meta-tag.green { background: #e6f4ea; color: #1e8e3e; }
+  .meta-tag.blue  { background: #e8f0fe; color: #1a73e8; }
+
+  .competitor-blocks {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .block {
+    background: #fff;
+    border: 1px solid #e8eaed;
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .block h4 {
+    font-family: 'Google Sans', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .block ul {
+    list-style: none;
+    padding: 0;
+  }
+  .block li {
+    font-size: 13px;
+    color: #5f6368;
+    padding: 4px 0;
+    padding-left: 16px;
+    position: relative;
+  }
+  .block li::before {
+    content: "•";
+    position: absolute;
+    left: 0;
+    color: #dadce0;
+  }
+  .has-block { border-left: 3px solid #34a853; }
+  .has-block h4 { color: #1e8e3e; }
+  .missing-block { border-left: 3px solid #ea4335; }
+  .missing-block h4 { color: #ea4335; }
+
+  /* ── Open source list ── */
+  .oss-list {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .oss-item {
+    background: #f8f9fa;
+    border: 1px solid #e8eaed;
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .oss-item h4 {
+    font-family: 'Google Sans', sans-serif;
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+  .oss-item .url {
+    font-size: 12px;
+    color: #1a0dab;
+    margin-bottom: 8px;
+    word-break: break-all;
+  }
+  .oss-item p {
+    font-size: 13px;
+    color: #5f6368;
+  }
+  .oss-item .missing {
+    font-size: 12px;
+    color: #ea4335;
+    margin-top: 8px;
+    font-style: italic;
+  }
+
+  /* ── Matrix table ── */
+  .matrix-wrap {
+    overflow-x: auto;
+    margin: 24px 0;
+  }
+  .matrix {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .matrix th, .matrix td {
+    padding: 10px 14px;
+    text-align: center;
+    border-bottom: 1px solid #e8eaed;
+  }
+  .matrix th {
+    font-family: 'Google Sans', sans-serif;
+    font-weight: 500;
+    color: #5f6368;
+    background: #f8f9fa;
+    position: sticky;
+    top: 0;
+  }
+  .matrix th:first-child { text-align: left; border-radius: 8px 0 0 0; }
+  .matrix th:last-child { border-radius: 0 8px 0 0; }
+  .matrix td:first-child { text-align: left; font-weight: 500; }
+  .matrix .yes { color: #1e8e3e; font-weight: 500; }
+  .matrix .no  { color: #dadce0; }
+  .matrix .partial { color: #e37400; }
+  .matrix tr:last-child td { background: #e8f0fe; font-weight: 600; }
+  .matrix tr:last-child td:first-child { border-radius: 0 0 0 8px; }
+  .matrix tr:last-child td:last-child { border-radius: 0 0 8px 0; }
+
+  /* ── Conclusion ── */
+  .conclusion {
+    background: #e8f0fe;
+    border-radius: 16px;
+    padding: 28px 32px;
+    margin-top: 40px;
+    border-left: 4px solid #1a73e8;
+  }
+  .conclusion h3 {
+    font-family: 'Google Sans', sans-serif;
+    font-size: 20px;
+    font-weight: 400;
+    color: #1a73e8;
+    margin-bottom: 16px;
+  }
+  .conclusion p {
+    font-size: 14px;
+    color: #202124;
+    margin-bottom: 12px;
+  }
+  .conclusion .pillars {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin: 20px 0;
+  }
+  .pillar {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+  }
+  .pillar .icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+  }
+  .pillar .name {
+    font-family: 'Google Sans', sans-serif;
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+  .pillar .who {
+    font-size: 12px;
+    color: #5f6368;
+  }
+
+  /* ── Footer ── */
+  .footer {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px 40px;
+    border-top: 1px solid #e8eaed;
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #70757a;
+  }
+
+  @media (max-width: 768px) {
+    .thesis-grid, .competitor-blocks, .pillars, .oss-list { grid-template-columns: 1fr; }
+    .matrix-wrap { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Referentes de mercado — Agenda 5ª Generación</h1>
+  <div class="meta">Búsqueda: 2026-06-22 · AppVoz · investigación/referentes-agenda-5g.md</div>
+</div>
+
+<div class="container">
+
+  <!-- Tesis -->
+  <div class="thesis-callout">
+    <h3>La tesis AppVoz: cuatro capacidades que deben darse juntas</h3>
+    <div class="thesis-grid">
+      <div class="thesis-item">
+        <div class="num">🎙️</div>
+        <div class="label"><strong>Conversación por voz</strong><br>Voz full-duplex como interfaz principal. No chat, no scheduler mudo.</div>
+      </div>
+      <div class="thesis-item">
+        <div class="num">📚</div>
+        <div class="label"><strong>RAG anclado</strong><br>Responde desde un método/libro concreto (grounding). No conocimiento genérico.</div>
+      </div>
+      <div class="thesis-item">
+        <div class="num">⚡</div>
+        <div class="label"><strong>Acción real</strong><br>Ejecuta: crea bloques en Calendar, refleja la agenda. No solo aconseja.</div>
+      </div>
+      <div class="thesis-item">
+        <div class="num">🧠</div>
+        <div class="label"><strong>Memoria del alumno</strong><br>Recuerda entre sesiones: PEP, Canva, rachas, perfil, cronófago dominante.</div>
+      </div>
+    </div>
+    <div class="foso">
+      <strong>Foso:</strong> Conversación + Conocimiento + Acción + Memoria. Ningún competidor tiene las cuatro juntas.
+    </div>
+  </div>
+
+  <!-- 1. Reclaim.ai -->
+  <h2 class="section-title">1. Reclaim.ai <span style="font-size:14px;color:#5f6368;font-weight:400;">— Dropbox</span></h2>
+  <div class="competitor">
+    <div class="competitor-header">
+      <h3>AI Calendar Assistant</h3>
+      <div class="url"><a href="https://reclaim.ai" target="_blank">reclaim.ai</a></div>
+    </div>
+    <div class="competitor-meta">
+      <span class="meta-tag green">+600.000 usuarios</span>
+      <span class="meta-tag green">70.000 empresas</span>
+      <span class="meta-tag">Grafana, Zapier, Indeed, Miro, 1Password, Zendesk, Instacart</span>
+      <span class="meta-tag blue">SOC 2 Type II</span>
+    </div>
+    <div class="competitor-blocks">
+      <div class="block has-block">
+        <h4>✅ Qué tiene</h4>
+        <ul>
+          <li>AI Focus Time: defiende bloques de deep work con objetivo semanal</li>
+          <li>AI Habits: rutinas flexibles auto-ubicadas en calendario</li>
+          <li>AI Tasks: sincroniza Asana, ClickUp, Todoist, Jira, Linear y agenda por prioridad</li>
+          <li>AI Smart Meetings: mejor slot entre asistentes; 524% más disponibilidad vs Calendly</li>
+          <li>AI Buffer Time: breaks, preparación y seguimiento automáticos</li>
+          <li>AI Calendar Sync: bloquea entre Google + Outlook</li>
+          <li>AI Planner: plan diario automatizado</li>
+          <li>AI Assistant (chat textual): planificar, priorizar, optimizar</li>
+          <li>Time Tracking + People Analytics + Workforce Analytics</li>
+          <li>Slack Status Sync, Pomodoro Timer</li>
+          <li>SSO/SCIM, GDPR, 99.9% uptime, plan gratuito disponible</li>
+        </ul>
+      </div>
+      <div class="block missing-block">
+        <h4>❌ Qué le falta vs. AppVoz 5G</h4>
+        <ul>
+          <li>Sin voz: interacción UI (drag & drop, formularios) o chat texto</li>
+          <li>Sin RAG anclado a método: no sabe de Eisenhower, Kairós/Cronos, T.A.R.G.E.T., 4 pilares</li>
+          <li>Sin pedagogía conversacional: es un scheduler, no un coach socrático</li>
+          <li>Sin onboarding guiado por voz (conciencia → agenda → aplicación)</li>
+          <li>Enfoque equipo/empresa, no viaje personal de autoliderazgo</li>
+          <li>Sin diagnósticos de perfil (Guerrero/Planificador/Director/Zen)</li>
+          <li>Sin memoria del "quién eres": no recuerda PEP, valores, dotación, €/min, rachas</li>
+        </ul>
+      </div>
+    </div>
+    <div style="margin-top:16px;font-size:13px;color:#5f6368">
+      <strong>Métricas declaradas:</strong> +7.6h focus/semana · -2.3 reuniones/semana · -49% tiempo desperdiciado · -4.15h overtime · +55.4% productividad · +41.9% work-life balance · -46.7% burnout
+    </div>
+  </div>
+
+  <!-- 2. Sesame -->
+  <h2 class="section-title">2. Sesame</h2>
+  <div class="competitor">
+    <div class="competitor-header">
+      <h3>Personal Intelligence with a Point of View</h3>
+      <div class="url"><a href="https://www.sesame.com" target="_blank">sesame.com</a></div>
+    </div>
+    <div class="competitor-meta">
+      <span class="meta-tag">Early stage</span>
+      <span class="meta-tag blue">Gafas inteligentes 2027</span>
+      <span class="meta-tag">Research Preview</span>
+    </div>
+    <div class="competitor-blocks">
+      <div class="block has-block">
+        <h4>✅ Qué tiene</h4>
+        <ul>
+          <li>Agentes de voz con personalidad ("a collection of personal agents")</li>
+          <li>Conversación natural para momentos cotidianos</li>
+          <li>"Think out loud. Follow a thread. Discover something unexpected"</li>
+          <li>Hardware propio: gafas con audio HD para manos-libres</li>
+          <li>Enfoque: curiosidad, exploración, acompañamiento</li>
+        </ul>
+      </div>
+      <div class="block missing-block">
+        <h4>❌ Qué le falta vs. AppVoz 5G</h4>
+        <ul>
+          <li>Sin RAG anclado a método: propósito general, no formación/coaching</li>
+          <li>Sin acción (Calendar): conversa pero no ejecuta ni agenda bloques</li>
+          <li>Sin memoria estructurada: no persiste Canva, PEP, rachas</li>
+          <li>Sin pedagogía: no sigue Eisenhower, T.A.R.G.E.T., etc.</li>
+          <li>Enfoque distinto: compañero de conversación, no coach de productividad</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Pi.ai -->
+  <h2 class="section-title">3. Pi.ai <span style="font-size:14px;color:#5f6368;font-weight:400;">— Inflection AI</span></h2>
+  <div class="competitor">
+    <div class="competitor-header">
+      <h3>Chatbot conversacional empático</h3>
+      <div class="url"><a href="https://pi.ai" target="_blank">pi.ai</a></div>
+    </div>
+    <div class="competitor-meta">
+      <span class="meta-tag">Propósito general</span>
+      <span class="meta-tag">Tono de "coach personal"</span>
+    </div>
+    <div class="competitor-blocks">
+      <div class="block has-block">
+        <h4>✅ Qué tiene</h4>
+        <ul>
+          <li>Tono cálido, empático, de apoyo</li>
+          <li>Diseñado como "compañero" más que asistente transaccional</li>
+          <li>Conversaciones largas con memoria de contexto en-sesión</li>
+        </ul>
+      </div>
+      <div class="block missing-block">
+        <h4>❌ Qué le falta vs. AppVoz 5G</h4>
+        <ul>
+          <li>Sin RAG anclado: conocimiento genérico del LLM</li>
+          <li>Sin acción (Calendar): no agenda, no ejecuta</li>
+          <li>Sin memoria persistente estructurada entre sesiones</li>
+          <li>Sin método/productividad: no enseña un sistema</li>
+          <li>Sin orquestación de modalidades (tests, esquemas, vídeos)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Gemini Live -->
+  <h2 class="section-title">4. Gemini Live <span style="font-size:14px;color:#5f6368;font-weight:400;">— Google</span></h2>
+  <div class="competitor">
+    <div class="competitor-header">
+      <h3>Voz full-duplex nativa + multimodal</h3>
+      <div class="url">Google AI Studio / App Gemini</div>
+    </div>
+    <div class="competitor-meta">
+      <span class="meta-tag blue">gemini-2.5-flash-native-audio</span>
+      <span class="meta-tag">Barge-in nativo</span>
+      <span class="meta-tag">VAD integrado</span>
+      <span class="meta-tag">Video en tiempo real</span>
+    </div>
+    <div class="competitor-blocks">
+      <div class="block has-block">
+        <h4>✅ Qué tiene</h4>
+        <ul>
+          <li>Voz full-duplex en tiempo real con modelo nativo de audio</li>
+          <li>Barge-in nativo (interrupción)</li>
+          <li>VAD del lado de Google</li>
+          <li>Streaming de audio bidireccional</li>
+          <li>Comprensión de video en tiempo real (pantalla/cámara)</li>
+          <li>Calidad de voz excelente, latencia baja</li>
+        </ul>
+      </div>
+      <div class="block missing-block">
+        <h4>❌ Qué le falta vs. AppVoz 5G</h4>
+        <ul>
+          <li>Sin RAG anclado a método: conocimiento genérico</li>
+          <li>Sin acción (Calendar): no agenda, no crea eventos</li>
+          <li>Sin memoria entre sesiones: cada sesión es independiente</li>
+          <li>Sin pedagogía: no sigue un currículum/método</li>
+          <li>Sin personalización por perfil</li>
+          <li>Producto de consumo generalista, no verticalizado</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. VoiceRAG & Open Source -->
+  <h2 class="section-title">5. Proyectos VoiceRAG (Open Source)</h2>
+  <div class="oss-list">
+    <div class="oss-item">
+      <h4>VoiceRAG — petermartens98</h4>
+      <div class="url">github.com/petermartens98/VoiceRAG-AI-Powered-Voice-Assistant-with-Knowledge-Retrieval</div>
+      <p>ElevenLabs Voice Agents + OpenAI GPT + Supabase/Vector DB + n8n. Voice-to-voice con RAG sobre base de conocimiento personal.</p>
+    </div>
+    <div class="oss-item">
+      <h4>Voice-to-Voice RAG Agent (Medium)</h4>
+      <div class="url">medium.com/@geetmanik2</div>
+      <p>Arquitectura completa de agente conversacional voz-a-voz con RAG.</p>
+    </div>
+    <div class="oss-item">
+      <h4>AI Personal Productivity Assistant — Bayzid03</h4>
+      <div class="url">github.com/Bayzid03/AI-Personal-Productivity-Assistant</div>
+      <p>RAG-based assistant que transforma notas/documentos en base de conocimiento conversacional.</p>
+    </div>
+    <div class="oss-item">
+      <h4>Voice-Enabled RAG (ChatNexus)</h4>
+      <div class="url">articles.chatnexus.io</div>
+      <p>"Voice-enabled RAG is not just an incremental upgrade; it's a transformational shift."</p>
+    </div>
+    <div class="oss-item">
+      <h4>RAG for Voice Platforms (Gladia)</h4>
+      <div class="url">gladia.io/blog</div>
+      <p>Combinación de STT + LLM + RAG para plataformas voice-first.</p>
+    </div>
+  </div>
+  <div style="margin-top:16px;font-size:13px;color:#ea4335;font-style:italic">
+    ⚠️ Son infraestructura/tecnología, no producto. Sin acción (Calendar), sin método pedagógico, sin onboarding guiado, sin memoria estructurada del alumno.
+  </div>
+
+  <!-- 6. Microsoft Copilot Studio -->
+  <h2 class="section-title">6. Microsoft Copilot Studio</h2>
+  <div class="competitor">
+    <div class="competitor-header">
+      <h3>Plataforma enterprise de agentes con RAG</h3>
+      <div class="url"><a href="https://learn.microsoft.com/en-us/microsoft-copilot-studio/guidance/retrieval-augmented-generation" target="_blank">learn.microsoft.com</a></div>
+    </div>
+    <div class="competitor-meta">
+      <span class="meta-tag">Enterprise</span>
+      <span class="meta-tag">RAG sobre SharePoint</span>
+    </div>
+    <div class="competitor-blocks">
+      <div class="block has-block">
+        <h4>✅ Qué tiene</h4>
+        <ul>
+          <li>RAG sobre documentos corporativos</li>
+          <li>Agentes conversacionales personalizables</li>
+          <li>Grounding en contenido organizacional</li>
+          <li>Orientado a soporte interno, RRHH, IT helpdesk</li>
+        </ul>
+      </div>
+      <div class="block missing-block">
+        <h4>❌ Qué le falta vs. AppVoz 5G</h4>
+        <ul>
+          <li>Sin voz nativa: orientado a chat texto</li>
+          <li>Sin coaching/productividad personal (casos de uso enterprise/soporte)</li>
+          <li>Sin acción (Calendar) sobre cuenta personal</li>
+          <li>Sin pedagogía/método</li>
+          <li>Sin memoria del alumno entre sesiones</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. Motion -->
+  <h2 class="section-title">7. Motion <span style="font-size:14px;color:#5f6368;font-weight:400;">— usemotion.com</span></h2>
+  <div class="competitor">
+    <div class="competitor-header">
+      <h3>AI Scheduler automático</h3>
+      <div class="url">usemotion.com</div>
+    </div>
+    <div class="competitor-meta">
+      <span class="meta-tag">Planificación diaria automática</span>
+      <span class="meta-tag">Time blocking por prioridad</span>
+    </div>
+    <div class="competitor-blocks">
+      <div class="block has-block">
+        <h4>✅ Qué tiene</h4>
+        <ul>
+          <li>Planificación diaria automática por prioridades</li>
+          <li>Reorganiza tareas si surge algo urgente</li>
+          <li>Time blocking automático</li>
+        </ul>
+      </div>
+      <div class="block missing-block">
+        <h4>❌ Qué le falta vs. AppVoz 5G</h4>
+        <ul>
+          <li>Sin voz</li>
+          <li>Sin conversación</li>
+          <li>Sin RAG anclado a método</li>
+          <li>Sin pedagogía</li>
+          <li>Sin diagnósticos de perfil</li>
+          <li>Sin memoria del "quién eres"</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tangenciales -->
+  <h2 class="section-title">8. Otros actores tangenciales</h2>
+  <div class="oss-list">
+    <div class="oss-item">
+      <h4>Yoodli</h4>
+      <p>AI speech coach para presentaciones y entrevistas. Voz + feedback, pero sin productividad/agenda.</p>
+    </div>
+    <div class="oss-item">
+      <h4>Otter.ai / Fireflies.ai</h4>
+      <p>Transcripción de reuniones + resúmenes. Sin coaching ni agenda.</p>
+    </div>
+    <div class="oss-item">
+      <h4>Notion AI / Mem / Reflect</h4>
+      <p>Notas con AI. Sin voz, sin acción calendar.</p>
+    </div>
+    <div class="oss-item">
+      <h4>Rosebud</h4>
+      <p>AI journaling por voz. Reflexión personal pero sin método de productividad ni acción.</p>
+    </div>
+  </div>
+
+  <!-- Matriz comparativa -->
+  <h2 class="section-title">Matriz comparativa completa</h2>
+  <div class="matrix-wrap">
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th>Capacidad</th>
+          <th>Reclaim</th>
+          <th>Sesame</th>
+          <th>Pi.ai</th>
+          <th>Gemini Live</th>
+          <th>VoiceRAG</th>
+          <th>Copilot Studio</th>
+          <th style="background:#e8f0fe">AppVoz 5G</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Voz full-duplex</td>
+          <td class="no">❌</td>
+          <td class="yes">✅</td>
+          <td class="partial">~</td>
+          <td class="yes">✅</td>
+          <td class="yes">✅</td>
+          <td class="no">❌</td>
+          <td class="yes">✅</td>
+        </tr>
+        <tr>
+          <td>RAG anclado a método</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="partial">~</td>
+          <td class="partial">~</td>
+          <td class="yes">✅</td>
+        </tr>
+        <tr>
+          <td>Acción real (Calendar)</td>
+          <td class="yes">✅</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="yes">✅</td>
+        </tr>
+        <tr>
+          <td>Memoria del alumno</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="yes">✅</td>
+        </tr>
+        <tr>
+          <td>Pedagogía socrática</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="yes">✅</td>
+        </tr>
+        <tr>
+          <td>Diagnósticos de perfil</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="yes">✅</td>
+        </tr>
+        <tr>
+          <td>Orquestación modalidades</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="yes">✅</td>
+        </tr>
+        <tr>
+          <td>Onboarding guiado</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="yes">✅</td>
+        </tr>
+        <tr>
+          <td>Métricas progreso personal</td>
+          <td class="yes">✅</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="no">❌</td>
+          <td class="yes">✅</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Conclusion -->
+  <div class="conclusion">
+    <h3>Conclusión: el hueco está confirmado</h3>
+    <p>Nadie ha juntado las <strong>cuatro capacidades</strong> (Conversación + Conocimiento + Acción + Memoria) en un solo producto. Los competidores más cercanos atacan <strong>una</strong> dimensión cada uno:</p>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="icon">📅</div>
+        <div class="name">Reclaim</div>
+        <div class="who">Acción (Calendar)<br>Sin voz ni pedagogía</div>
+      </div>
+      <div class="pillar">
+        <div class="icon">🎙️</div>
+        <div class="name">Sesame / Pi</div>
+        <div class="who">Voz + empatía<br>Sin método ni acción</div>
+      </div>
+      <div class="pillar">
+        <div class="icon">🤖</div>
+        <div class="name">Gemini Live</div>
+        <div class="who">Infraestructura de voz<br>Sin dominio ni memoria</div>
+      </div>
+    </div>
+    <p style="font-style:italic;margin-top:16px">«Que hable no es el foso — cualquiera enchufa un LLM. El foso es la intersección de tres cosas: anclado (RAG), con memoria, con acción. Quita una y se cae.»</p>
+    <p style="font-size:13px;color:#5f6368;margin-top:8px">— Vision-Agenda-5G-Pedagogia-Conversacional.md</p>
+  </div>
+
+</div>
+
+<div class="footer">
+  <span>AppVoz — Motor Tutor por Voz</span>
+  <span>investigación/referentes-agenda-5g.html · 2026-06-22</span>
+</div>
+
+</body>
+</html>
