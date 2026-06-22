@@ -88,10 +88,12 @@ def _guion_agente(seccion: dict) -> str:
     return "  ".join(f"«{a['pregunta']}»" for a in seccion.get("apartados", []) if a.get("pregunta"))
 
 
-async def _inyectar_agente(session, shared: dict, idx: int) -> None:
+async def _inyectar_agente(session, shared: dict, idx: int, repasar: bool = False) -> None:
     """RELEVO DE ROL en la MISMA sesión (sin reconectar → la voz NO se toca): convierte a Faro en el
     'agente' del bloque `idx`, pasándole la memoria de lo ya capturado (resumen) y SOLO las preguntas
-    de esa fase. Es 'un agente nuevo coge el testigo', pero dentro de una sola línea de audio."""
+    de esa fase. Es 'un agente nuevo coge el testigo', pero dentro de una sola línea de audio.
+    `repasar=True` (botón «Repasar» sobre un bloque YA completo): no conduce el guion ni relee los
+    datos (la persona los ve en pantalla); solo pregunta si quiere cambiar o añadir algo de ese bloque."""
     if session is None or not (0 <= idx < len(canva4g.SECCIONES)):
         return
     seccion = canva4g.SECCIONES[idx]
@@ -115,14 +117,26 @@ async def _inyectar_agente(session, shared: dict, idx: int) -> None:
     partes = [f"(Ahora céntrate SOLO en la fase «{seccion['titulo']}». {apertura}"]
     if resumen:
         partes.append(f"Para dar continuidad (NO lo repreguntes), la persona YA te ha contado: {resumen}.")
-    partes.append(
-        f"Haz estas preguntas, una a una y TAL CUAL (palabra por palabra), esperando respuesta a cada "
-        f"una antes de la siguiente: {guion}")
-    if capturado:
-        partes.append(f"De ESTE apartado la persona YA te dio: {capturado}. NO lo repreguntes; "
-                      f"continúa pidiendo SOLO lo que falte.")
-    partes.append("Cuando tengas TODAS esas respuestas, NO sigas con otra fase ni preguntes más: "
-                  "invita a la persona a pulsar el siguiente apartado cuando quiera, y espera.)")
+    if repasar:
+        # MODO REPASO: el bloque YA está completo y la persona lo VE en pantalla. No conducir el guion
+        # ni releérselo; solo ofrecerle modificarlo. `capturado` va como contexto silencioso para que
+        # entienda correcciones del tipo "cambia el tiempo a 30".
+        if capturado:
+            partes.append(f"(Contexto, NO lo leas en voz alta) lo que tienes anotado de este apartado: {capturado}.")
+        partes.append(
+            "La persona ya completó este apartado y lo está viendo en pantalla, así que NO se lo releas. "
+            f"Pregúntale en UNA sola frase cálida si quiere cambiar o añadir algo de «{seccion['titulo']}». "
+            "Si dice que no o que está bien, agradece en UNA frase y PARA. Si pide un cambio, recoge SOLO "
+            "eso, confírmaselo y PARA. NO hagas las preguntas de cero ni pases a otra fase.)")
+    else:
+        partes.append(
+            f"Haz estas preguntas, una a una y TAL CUAL (palabra por palabra), esperando respuesta a cada "
+            f"una antes de la siguiente: {guion}")
+        if capturado:
+            partes.append(f"De ESTE apartado la persona YA te dio: {capturado}. NO lo repreguntes; "
+                          f"continúa pidiendo SOLO lo que falte.")
+        partes.append("Cuando tengas TODAS esas respuestas, NO preguntes más ni pases a otra fase: "
+                      "agradece en UNA frase y PARA (yo me encargo de invitar a continuar).)")
     shared["bot_speaking"] = True
     try:
         await session.send_client_content(
@@ -161,8 +175,9 @@ async def _invitar_siguiente(session, shared: dict, idx: int) -> None:
 
 
 async def _control_4g(data: dict, session, shared: dict) -> None:
-    """Mensajes de control del navegador propios del 4g. {type:'goto', idx}: el USUARIO inicia el
-    apartado `idx` → relevamos al agente de ese bloque en la misma sesión (inicio manual)."""
+    """Mensajes de control del navegador propios del 4g. {type:'goto', idx, repasar}: el USUARIO inicia
+    el apartado `idx` → relevamos al agente de ese bloque en la misma sesión (inicio manual). `repasar`
+    (botón «Repasar» sobre un bloque ya completo) hace que el agente solo ofrezca cambios, no reentreviste."""
     if data.get("type") != "goto":
         return
     try:
@@ -174,10 +189,11 @@ async def _control_4g(data: dict, session, shared: dict) -> None:
     guion = (data.get("guion") or "").strip()   # prompt editado en el desplegable del navegador
     if guion:
         shared.setdefault("_guion_custom", {})[idx] = guion
+    repasar = bool(data.get("repasar"))   # «Repasar»: el bloque YA está completo → solo ofrecer cambios
     shared["sec_idx"] = idx
     shared["_hablo_en_bloque"] = False   # al (re)abrir el bloque, aún no ha hablado el usuario en él
     shared.get("_invitado", set()).discard(canva4g.SECCIONES[idx]["key"])   # permite re-cerrar al recompletar
-    await _inyectar_agente(session, shared, idx)
+    await _inyectar_agente(session, shared, idx, repasar=repasar)
 
 
 async def _extraer_y_push(ws: WebSocket, shared: dict):

@@ -278,10 +278,12 @@ async function iniciarBloque(idx) {
   }
   if (!ws || ws.readyState !== 1) { setStatus("Conexión no lista; pulsa de nuevo."); return; }
   const s = SECCIONES[idx];
-  ws.send(JSON.stringify({ type: "goto", idx, guion: s ? guionDe(s) : "" }));
+  const repasar = !!(s && DONE.has(s.key));   // bloque YA completo → modo «Repasar» (solo ofrecer cambios)
+  ws.send(JSON.stringify({ type: "goto", idx, guion: s ? guionDe(s) : "", repasar }));
   micActivo = true; ACTIVA = idx; curWho = null; curBubble = null;
   renderStepper(); renderCanva();
-  setStatus("Hablando con el agente de «" + (SECCIONES[idx] ? SECCIONES[idx].titulo : "") + "» — escucha y responde.");
+  setStatus((repasar ? "Repasando «" : "Hablando con el agente de «") +
+    (SECCIONES[idx] ? SECCIONES[idx].titulo : "") + "» — escucha y responde.");
 }
 
 function stop() {
