@@ -90,6 +90,21 @@
   .hist-item .h-preview { color:#9aa3b2; font-size:.74rem; margin-top:3px;
                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .hist-empty { color:#7f8a9b; font-size:.78rem; font-style:italic; padding:4px 2px; }
+
+  /* ---------- Móvil: panel y chat se apilan; la página hace scroll ---------- */
+  @media (max-width: 820px) {
+    html, body { height: auto; }
+    /* Admin: la cuadrícula scrollea con el documento */
+    #adminView { height: auto; min-height: 100vh; overflow-y: visible; padding: 20px 16px; }
+    /* Servicio: la llamada + chat van PRIMERO; la configuración debajo */
+    #servicioView { flex-direction: column; height: auto; }
+    #main { order: -1; padding: 14px 16px; border-bottom: 1px solid #232834; }
+    /* el chat necesita altura mínima útil al quedar apilado */
+    #chat { min-height: 55vh; }
+    #panel {
+      width: 100%; min-width: 0; border-right: 0; overflow-y: visible;
+    }
+  }
 </style>
 </head>
 <body>

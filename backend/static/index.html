@@ -22,6 +22,16 @@
   table { width:100%; border-collapse:collapse; } td { padding:4px 8px; border-bottom:1px solid #232834; }
   td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
   #status { min-height:1.2em; color:#9aa3b2; }
+
+  /* ---------- Móvil ---------- */
+  @media (max-width: 600px) {
+    body { margin: 16px auto; }
+    h1 { font-size: 1.15rem; }
+    .row { gap: 8px; }
+    /* En la fila de preguntar, el botón pasa a ancho completo al envolver */
+    #ask { flex: 1 1 100%; }
+    #talk { padding: 18px; }
+  }
 </style>
 </head>
 <body>

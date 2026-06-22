@@ -115,6 +115,35 @@
     .msg.user .who { color: var(--accent2); }
     .msg.bot .who { color: var(--accent); }
     .hidden { display: none; }
+
+    /* ---------- Móvil: las 3 columnas se apilan dentro de la pantalla ---------- */
+    @media (max-width: 820px) {
+      /* altura fija a la pantalla: el Canva scrollea por dentro y el chat
+         se queda anclado abajo, siempre visible (no enterrado al final) */
+      body { height: 100vh; }
+      header { flex-wrap: wrap; gap: 8px 12px; padding: 12px 16px; }
+      header h1 { font-size: 16px; }
+      header h1 .sub { display: none; }
+      /* el texto de estado se va a su propia línea, ancho completo */
+      #status { order: 5; flex-basis: 100%; }
+      main { flex-direction: column; min-height: 0; }
+      /* stepper: de columna lateral a fila horizontal con scroll */
+      nav {
+        width: auto; flex: 0 0 auto;
+        border-right: 0; border-bottom: 1px solid var(--line);
+        display: flex; flex-direction: row; gap: 6px; overflow-x: auto;
+        padding: 10px 12px;
+      }
+      .step { flex: 0 0 auto; margin-bottom: 0; white-space: nowrap; }
+      /* canva: ocupa el hueco libre y scrollea por dentro */
+      section.canva { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
+      .grid { grid-template-columns: 1fr; gap: 12px; }
+      /* conversación: franja fija abajo, siempre a la vista, con scroll propio */
+      aside {
+        width: auto; flex: 0 0 34vh; max-height: 34vh;
+        border-left: 0; border-top: 1px solid var(--line);
+      }
+    }
   </style>
 </head>
 <body>
