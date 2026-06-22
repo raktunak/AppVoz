@@ -27,5 +27,11 @@ class Settings(BaseSettings):
     telnyx_sip_subdomain: str = ""        # subdominio SIP de pruebas (no secreto)
     telnyx_public_ws_url: str = ""        # override del WSS del media-stream (vacío = derivar del host)
 
+    # Agenda (Google Calendar) — auth por la SA appvoz-voice (+scope calendar). El calendario
+    # debe estar COMPARTIDO con el email de la SA. `calendar_id` es el de la demo/por defecto;
+    # más adelante cada servicio tendrá el suyo (opt-in `citas_activas`).
+    calendar_id: str = ""                 # ID del calendario destino (no secreto)
+    agenda_timezone: str = "Europe/Madrid"
+
 
 settings = Settings()
