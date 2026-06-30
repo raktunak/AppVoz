@@ -98,6 +98,19 @@ SECCIONES = [
 
 SECCIONES_POR_KEY = {s["key"]: s for s in SECCIONES}
 
+# Consulta de RAG por bloque: recupera del corpus del libro las ideas de Fabián que ANCLAN el
+# coaching de esa fase (se inyectan como MATERIAL en el relevo de agente). None = sin anclaje
+# (la presentación no necesita material del libro).
+RAG_QUERIES = {
+    "presentacion": None,
+    "vision": "la visión personal: qué quieres ser, hacer y tener; imaginar tres meses de vida",
+    "mision": "la misión personal ligada a tus dones y talentos; la dotación",
+    "valores": "los valores: principios que guían tus decisiones",
+    "pilares": "los cuatro pilares de la vida: espiritual, mental-emocional, físico, social; rueda de la vida",
+    "roles": "qué es un rol; la parrilla de los ocho roles por pilar",
+    "bloque": "bloques de tiempo, time blocking; si no está en la agenda no existe",
+}
+
 
 def secciones_publicas() -> list[dict]:
     """Para el frontend: key, título, tipo, apartados y campo-lista de cada sección."""

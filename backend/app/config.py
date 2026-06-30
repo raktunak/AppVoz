@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # Live NO está en el endpoint 'global'; us-central1 es la región fiable.
     google_application_credentials: str = "credentials/appvoz-voice.json"
     gcp_live_location: str = "us-central1"
+    # Embeddings por Vertex (misma SA/proyecto que la voz → usa los créditos GCP,
+    # sin el límite free-tier de la Developer API). Región con gemini-embedding-001.
+    gcp_embeddings_location: str = "us-central1"
 
     # Embeddings
     embedding_model: str = "gemini-embedding-001"
@@ -32,6 +35,15 @@ class Settings(BaseSettings):
     # más adelante cada servicio tendrá el suyo (opt-in `citas_activas`).
     calendar_id: str = ""                 # ID del calendario destino (no secreto)
     agenda_timezone: str = "Europe/Madrid"
+
+    # OAuth Google (login de alumnos + Calendar por usuario). Se crean en Google Cloud
+    # Console: pantalla de consentimiento + credenciales tipo "Aplicación web", con la
+    # redirect_uri de abajo en "URIs de redireccionamiento autorizados".
+    google_oauth_client_id: str = ""      # SECRETO-ish (id público pero se trata como config)
+    google_oauth_client_secret: str = ""  # SECRETO
+    oauth_redirect_uri: str = "http://localhost:8080/auth/callback"
+    # A dónde volver tras un login correcto (la UI del onboarding).
+    post_login_redirect: str = "/4g/"
 
 
 settings = Settings()

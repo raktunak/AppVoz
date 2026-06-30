@@ -30,6 +30,14 @@
     a.cfg { text-decoration: none; color: var(--muted); border: 1px solid var(--line);
       border-radius: 999px; padding: 9px 16px; font-size: 14px; }
     a.cfg:hover { color: var(--txt); border-color: var(--accent2); }
+    .authbar { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+    .authbar .me { color: var(--txt); }
+    a.gbtn { text-decoration: none; cursor: pointer; border: 1px solid var(--line); background: #fff;
+      color: #3c4043; border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600; }
+    a.gbtn:hover { border-color: var(--accent2); }
+    button.linklike { background: transparent; border: 0; color: var(--muted); cursor: pointer;
+      font-size: 13px; text-decoration: underline; }
+    button.linklike:hover { color: #e9bfbf; }
     button.reset { border: 1px solid var(--line); background: transparent; color: var(--muted);
       border-radius: 999px; padding: 9px 14px; font-size: 14px; cursor: pointer; }
     button.reset:hover { color: #e9bfbf; border-color: #8a3a3a; }
@@ -151,6 +159,7 @@
     <h1>Agenda 4G <span class="sub">· tu vida en un Canva</span></h1>
     <div class="grow"></div>
     <span id="status">Pulsa «▶ Empezar» en un apartado — su agente te atiende.</span>
+    <span id="authbar" class="authbar"></span>
     <button id="reset" class="reset" title="Borra tu Canva y tus citas de prueba — empezar de cero">↺ Reiniciar</button>
     <a class="cfg" href="/call?svc=4g" title="Configuración del servicio 4g (modelo, voz, persona, VAD)">⚙ Configuración</a>
   </header>
@@ -164,6 +173,29 @@
       <div id="chat"></div>
     </aside>
   </main>
+  <script>
+    // Puerta de login (Google): muestra el estado en la cabecera. NO bloquea el uso local si OAuth
+    // no está configurado (la sesión va por cookie httpOnly; el WS /ws/4g la usa automáticamente).
+    (async function authUI() {
+      const bar = document.getElementById('authbar');
+      try {
+        const r = await fetch('/auth/me', { credentials: 'same-origin' });
+        if (r.ok) {
+          const u = await r.json();
+          bar.innerHTML = '<span class="me">👤 ' + (u.nombre || u.email) + '</span>'
+            + ' <button class="linklike" id="logout">Salir</button>';
+          document.getElementById('logout').onclick = async () => {
+            await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
+            location.reload();
+          };
+        } else {
+          bar.innerHTML = '<a class="gbtn" href="/auth/login">Entrar con Google</a>';
+        }
+      } catch (e) {
+        bar.innerHTML = '<a class="gbtn" href="/auth/login">Entrar con Google</a>';
+      }
+    })();
+  </script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -3,6 +3,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from .auth import crear_tablas_auth
+from .auth import router as auth_router
 from .canva4g import crear_tablas_4g
 from .chunking import chunk_text
 from .db import engine
@@ -29,6 +31,7 @@ app.include_router(voice_router)
 app.include_router(live_router)  # /ws/call (Gemini Live directo)
 app.include_router(telnyx_router)  # /telnyx/voice (webhook) + /ws/telnyx (media-stream)
 app.include_router(onboarding_4g_router)  # /ws/4g (onboarding 4G por voz → Canva → Calendar)
+app.include_router(auth_router)  # /auth/* (login Google + sesiones + Calendar por usuario)
 
 
 @app.on_event("startup")
@@ -37,6 +40,8 @@ async def _startup():
     await crear_tablas()
     # Tabla del Canva 4G (onboarding); idempotente.
     await crear_tablas_4g()
+    # Tablas de auth (usuarios + sesiones); idempotente.
+    await crear_tablas_auth()
 
 
 # ---------- Salud ----------

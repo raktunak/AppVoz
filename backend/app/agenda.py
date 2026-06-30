@@ -85,7 +85,7 @@ def _a_zona(dt: datetime) -> datetime:
 # usar los envoltorios async de más abajo.
 # --------------------------------------------------------------------------- #
 def _crear_evento_sync(
-    calendar_id: str, inicio: datetime, duracion_min: int, resumen: str,
+    service, calendar_id: str, inicio: datetime, duracion_min: int, resumen: str,
     descripcion: str | None, telefono: str | None, nombre: str | None,
     datos: dict | None,
 ) -> dict:
@@ -107,7 +107,7 @@ def _crear_evento_sync(
         "end": {"dateTime": fin.isoformat(), "timeZone": tz_name},
         "extendedProperties": {"private": private},
     }
-    ev = _get_service().events().insert(calendarId=calendar_id, body=body).execute()
+    ev = service.events().insert(calendarId=calendar_id, body=body).execute()
     logger.info(f"[agenda] cita creada id={ev['id']} inicio={inicio.isoformat()} cal={calendar_id}")
     return {
         "event_id": ev["id"],
@@ -160,18 +160,34 @@ def _borrar_evento_sync(calendar_id: str, event_id: str) -> bool:
 # API pública async (la que usa el relay / la tool). asyncio.to_thread mantiene
 # el event-loop libre mientras la llamada HTTP a Calendar está en curso.
 # --------------------------------------------------------------------------- #
+def _service_de_creds(creds):
+    """Cliente de Calendar a partir de credenciales OAuth de un USUARIO (no la SA)."""
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+
 async def crear_evento(
     calendar_id: str, inicio: datetime, *, duracion_min: int = 30, resumen: str | None = None,
     descripcion: str | None = None, telefono: str | None = None, nombre: str | None = None,
     datos: dict | None = None,
 ) -> dict:
-    """Crea una cita y devuelve {event_id, html_link, inicio, fin}. `inicio` puede venir
+    """Crea una cita con la SERVICE ACCOUNT (calendario compartido). `inicio` puede venir
     naive (se asume zona de la agenda) o aware. Si no se pasa `resumen`, se arma uno básico."""
     resumen = resumen or (f"Cita: {nombre}" if nombre else "Cita")
     return await asyncio.to_thread(
-        _crear_evento_sync, calendar_id, inicio, duracion_min, resumen,
-        descripcion, telefono, nombre, datos,
-    )
+        lambda: _crear_evento_sync(_get_service(), calendar_id, inicio, duracion_min, resumen,
+                                   descripcion, telefono, nombre, datos))
+
+
+async def crear_evento_con_creds(
+    creds, inicio: datetime, *, calendar_id: str = "primary", duracion_min: int = 30,
+    resumen: str | None = None, descripcion: str | None = None, datos: dict | None = None,
+) -> dict:
+    """Crea una cita en el Google Calendar DEL USUARIO con sus credenciales OAuth propias.
+    `calendar_id='primary'` = su calendario principal. Cliente y alta van en un hilo."""
+    resumen = resumen or "Bloque (4G)"
+    return await asyncio.to_thread(
+        lambda: _crear_evento_sync(_service_de_creds(creds), calendar_id, inicio, duracion_min,
+                                   resumen, descripcion, None, None, datos))
 
 
 async def buscar_eventos(calendar_id: str, telefono: str, desde: datetime | None = None) -> list[dict]:

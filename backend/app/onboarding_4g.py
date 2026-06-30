@@ -25,9 +25,10 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from google.genai import types
 from loguru import logger
 
-from . import agenda, canva4g, persistence
+from . import agenda, auth, canva4g, persistence
 from .config import settings
 from .live_relay import _browser_to_gemini, _build_config, _client, _vad_params
+from .rag import retrieve
 
 router = APIRouter()
 
@@ -129,6 +130,21 @@ async def _inyectar_agente(session, shared: dict, idx: int, repasar: bool = Fals
             "Si dice que no o que está bien, agradece en UNA frase y PARA. Si pide un cambio, recoge SOLO "
             "eso, confírmaselo y PARA. NO hagas las preguntas de cero ni pases a otra fase.)")
     else:
+        # ANCLAJE AL LIBRO (RAG): ideas de Fabián que sostienen el coaching de este bloque. Se
+        # recuperan del corpus del servicio (subject_id) y se inyectan como MATERIAL de apoyo.
+        rag_query = canva4g.RAG_QUERIES.get(seccion["key"])
+        if rag_query and shared.get("subject_id"):
+            try:
+                frags = await retrieve(shared["subject_id"], rag_query, k=3)
+            except Exception:
+                logger.exception("[4g] RAG retrieve falló; sigo sin material")
+                frags = []
+            material = " /// ".join((f.get("content") or "").strip() for f in frags)
+            if material:
+                partes.append(
+                    "Apóyate en estas IDEAS del libro de Fabián para guiar y matizar este bloque "
+                    "(NO las leas literal; úsalas con tus palabras y cita una frase corta solo si "
+                    "encaja; si algo no está aquí, no lo inventes): " + material)
         partes.append(
             f"Haz estas preguntas, una a una y TAL CUAL (palabra por palabra), esperando respuesta a cada "
             f"una antes de la siguiente: {guion}")
@@ -265,25 +281,36 @@ async def _agendar_bloque(ws: WebSocket, shared: dict):
     iso, rol = bloque.get("fecha_hora_iso"), bloque.get("rol")
     if not iso or not rol:
         return
-    cal = settings.calendar_id
-    if not cal:
-        await ws.send_text(json.dumps({"type": "booked", "ok": False, "error": "Falta CALENDAR_ID"}))
-        return
     try:
         inicio = datetime.fromisoformat(iso)
     except Exception:
         logger.warning(f"[4g] fecha_hora_iso no parseable: {iso}")
         await ws.send_text(json.dumps({"type": "booked", "ok": False, "error": "fecha no válida"}))
         return
+    # Calendar DEL USUARIO (OAuth propio) si está logueado; si no, la SA + calendario compartido.
+    creds = await auth.credenciales_calendar(shared["user_id"]) if shared.get("autenticado") else None
     try:
-        ev = await agenda.crear_evento(
-            cal, inicio, duracion_min=120, resumen=f"{rol} (4G)",
-            descripcion="Primer bloque creado en el onboarding 4G.",
-            telefono=shared["user_id"], datos={"rol": rol, "origen": "4g"},
-        )
+        if creds:
+            ev = await agenda.crear_evento_con_creds(
+                creds, inicio, calendar_id="primary", duracion_min=120, resumen=f"{rol} (4G)",
+                descripcion="Primer bloque creado en el onboarding 4G.",
+                datos={"rol": rol, "origen": "4g"},
+            )
+        else:
+            cal = settings.calendar_id
+            if not cal:
+                await ws.send_text(json.dumps({"type": "booked", "ok": False,
+                    "error": "Inicia sesión con Google (o falta CALENDAR_ID)"}))
+                return
+            ev = await agenda.crear_evento(
+                cal, inicio, duracion_min=120, resumen=f"{rol} (4G)",
+                descripcion="Primer bloque creado en el onboarding 4G.",
+                telefono=shared["user_id"], datos={"rol": rol, "origen": "4g"},
+            )
         shared["_booked"] = True
         await ws.send_text(json.dumps({"type": "booked", "ok": True, "event": ev}))
-        logger.info(f"[4g] bloque agendado rol='{rol}' inicio={iso} event={ev.get('event_id')}")
+        logger.info(f"[4g] bloque agendado rol='{rol}' inicio={iso} event={ev.get('event_id')} "
+                    f"calendar={'usuario' if creds else 'SA'}")
     except Exception as e:
         logger.exception("[4g] no pude agendar el bloque")
         await ws.send_text(json.dumps({"type": "booked", "ok": False, "error": str(e)}))
@@ -341,16 +368,25 @@ async def ws_4g(ws: WebSocket):
     await ws.accept()
     logger.info("[4g] WS conectado; esperando config…")
     user_id = "anonimo"
+    autenticado = False
+    # Identidad por la cookie de sesión (login Google). Si hay sesión, PREVALECE sobre el
+    # user_id que mande el cliente (multiusuario real: cada alumno es su email).
+    try:
+        u = await auth.usuario_por_sid(ws.cookies.get(auth.COOKIE))
+        if u:
+            user_id, autenticado = u["email"], True
+    except Exception:
+        logger.exception("[4g] no pude resolver la sesión por cookie")
     try:
         msg = await ws.receive()
         if msg.get("type") == "websocket.disconnect":
             return
         txt = msg.get("text")
-        if txt:
+        if txt and not autenticado:   # sin login: acepto el user_id del cliente (dev/local)
             data = json.loads(txt)
             user_id = (data.get("user_id") or "anonimo").strip() or "anonimo"
     except Exception:
-        logger.exception("[4g] handshake de config falló; sigo con anonimo")
+        logger.exception("[4g] handshake de config falló; sigo con user_id actual")
 
     cfg, subject_id = await _cargar_cfg_4g()
     fecha_str = _fecha_ctx()
@@ -360,7 +396,8 @@ async def ws_4g(ws: WebSocket):
     vad = _vad_params(cfg)
 
     shared = {
-        "bot_speaking": False, "user_id": user_id, "subject_id": subject_id,
+        "bot_speaking": False, "user_id": user_id, "autenticado": autenticado,
+        "subject_id": subject_id,
         "canva": canva_prev or {}, "sec_idx": canva4g.primera_incompleta(canva_prev),
         "fecha_str": fecha_str, "conv": "", "_last": None,
         "no_barge": True,   # anti-eco: el micro se ignora mientras Faro habla

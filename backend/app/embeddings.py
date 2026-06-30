@@ -1,11 +1,22 @@
 import asyncio
+import os
 
 from google import genai
 from google.genai import types
 
 from .config import settings
 
-_client = genai.Client(api_key=settings.google_api_key)
+# Embeddings por Vertex AI (mismo proyecto y SA que la voz). Así consumen los
+# créditos de GCP y NO el free-tier de la Developer API (límite 100/min). Mismo
+# modelo gemini-embedding-001 → vectores compatibles. Patrón espejo de live_relay.
+_sa = settings.google_application_credentials
+if _sa and os.path.exists(_sa) and "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _sa
+_client = genai.Client(
+    vertexai=True,
+    project=settings.gcp_project_id,
+    location=settings.gcp_embeddings_location,
+)
 
 
 def _embed_sync(texts: list[str], task_type: str) -> list[list[float]]:
