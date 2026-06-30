@@ -4,3 +4,5 @@ __pycache__/
 venv/
 .env
 *.log
+# Nunca hornear la cuenta de servicio en la imagen: en Cloud Run se usa ADC (la SA del contenedor).
+credentials/
