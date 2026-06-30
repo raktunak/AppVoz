@@ -286,6 +286,31 @@ async function iniciarBloque(idx) {
     (SECCIONES[idx] ? SECCIONES[idx].titulo : "") + "» — escucha y responde.");
 }
 
+// MODO PROBADOR: charla libre con herramientas (RAG del libro + Calendar por voz). No toca el Canva.
+async function iniciarProbador() {
+  if (!connected) {
+    setStatus("Conectando…");
+    try { await connect(); } catch (e) { setStatus("No pude conectar: " + e); stop(); return; }
+  }
+  if (!ws || ws.readyState !== 1) { setStatus("Conexión no lista; pulsa de nuevo."); return; }
+  ws.send(JSON.stringify({ type: "probador" }));
+  micActivo = true; ACTIVA = -1; curWho = null; curBubble = null;
+  renderStepper(); renderCanva(); setProbadorBtn(true);
+  setStatus("🧪 Probador — pregúntale por el libro o pídele agendar/ver/borrar una cita.");
+}
+// El botón del Probador ALTERNA: ▶ Empezar ↔ ⏹ Parar (rojo cuando está en marcha).
+function setProbadorBtn(on) {
+  const b = $("btnProbador");
+  if (!b) return;
+  b.textContent = on ? "⏹ Parar" : "▶ Empezar";
+  b.classList.toggle("pausar", on);
+}
+const _btnProb = $("btnProbador");
+if (_btnProb) _btnProb.addEventListener("click", () => {
+  if (_btnProb.classList.contains("pausar")) { stop(); setStatus("⏹ Conversación detenida."); }
+  else iniciarProbador();
+});
+
 function stop() {
   connected = false; micActivo = false;
   try { micNode && micNode.disconnect(); } catch (e) {}
@@ -294,7 +319,7 @@ function stop() {
   try { ws && ws.close(); } catch (e) {}
   flushPlayback();
   micNode = micStream = micCtx = null; ws = null; ACTIVA = -1;
-  renderStepper(); renderCanva();
+  renderStepper(); renderCanva(); setProbadorBtn(false);
   setStatus("Sesión finalizada. Tu Canva queda guardado.");
 }
 

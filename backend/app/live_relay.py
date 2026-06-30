@@ -215,10 +215,11 @@ async def obtener_sesion(session_id: int):
     return sesion
 
 
-def _build_config(cfg: dict) -> tuple[str, types.LiveConnectConfig]:
+def _build_config(cfg: dict, tools: list | None = None) -> tuple[str, types.LiveConnectConfig]:
     """Construye el LiveConnectConfig por conexión según las CAPACIDADES del modelo
     elegido: solo aplica voz/idioma/features que ese modelo admite (lo demás se ignora,
-    para no provocar que la API rechace la sesión)."""
+    para no provocar que la API rechace la sesión). `tools` (opcional): herramientas de
+    function-calling para la sesión (p.ej. el Probador del 4g); el resto de vías no las usan."""
     model = cfg.get("model") if cfg.get("model") in MODELS_CAPS else DEFAULT_MODEL
     caps = MODELS_CAPS[model]
     voice = cfg.get("voice") if cfg.get("voice") in caps["voices"] else caps["default_voice"]
@@ -276,6 +277,9 @@ def _build_config(cfg: dict) -> tuple[str, types.LiveConnectConfig]:
             kwargs["proactivity"] = types.ProactivityConfig(proactive_audio=True)
     except Exception:
         logger.exception("no pude activar feature native-audio; sigo sin ella")
+
+    if tools:
+        kwargs["tools"] = tools
 
     return model, types.LiveConnectConfig(**kwargs)
 

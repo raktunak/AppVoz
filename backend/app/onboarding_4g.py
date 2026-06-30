@@ -34,6 +34,54 @@ router = APIRouter()
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 
+# Herramientas (function-calling) del modo PROBADOR: consultar el libro (RAG) y gestionar el
+# Google Calendar del usuario. Es el cimiento de la "acción por voz" (Fase 2).
+TOOLS_PROBADOR = [types.Tool(function_declarations=[
+    types.FunctionDeclaration(
+        name="buscar_en_libro",
+        description="Busca en el libro 'La Agenda de Cuarta Generación' de Fabián González para "
+                    "responder anclado a su contenido. Úsala SIEMPRE que pregunten por el libro o el método.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={"consulta": types.Schema(type=types.Type.STRING,
+                        description="La pregunta o tema a buscar en el libro.")},
+            required=["consulta"],
+        ),
+    ),
+    types.FunctionDeclaration(
+        name="crear_evento",
+        description="Crea un evento/bloque en el Google Calendar del usuario.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "titulo": types.Schema(type=types.Type.STRING, description="Título del evento."),
+                "fecha_hora_iso": types.Schema(type=types.Type.STRING,
+                    description="Inicio en ISO 8601 con offset, p.ej. 2026-07-02T10:00:00+02:00."),
+                "duracion_min": types.Schema(type=types.Type.INTEGER,
+                    description="Duración en minutos (por defecto 60)."),
+            },
+            required=["titulo", "fecha_hora_iso"],
+        ),
+    ),
+    types.FunctionDeclaration(
+        name="listar_eventos",
+        description="Lista los próximos eventos del Google Calendar del usuario (para verlos o para "
+                    "obtener el event_id antes de borrar uno).",
+        parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+    ),
+    types.FunctionDeclaration(
+        name="borrar_evento",
+        description="Borra un evento del Google Calendar del usuario por su event_id "
+                    "(obtenlo antes con listar_eventos).",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={"event_id": types.Schema(type=types.Type.STRING,
+                        description="ID del evento a borrar.")},
+            required=["event_id"],
+        ),
+    ),
+])]
+
 
 def _firma_oblig(seccion: dict, datos: dict | None):
     """Firma de los campos obligatorios de una sección, para detectar ESTABILIDAD entre turnos
@@ -190,10 +238,77 @@ async def _invitar_siguiente(session, shared: dict, idx: int) -> None:
         logger.exception("[4g] no pude invitar a seguir")
 
 
+async def _ejecutar_funcion(nombre: str, args: dict, shared: dict, ws: WebSocket) -> dict:
+    """Ejecuta una herramienta del Probador y devuelve el dict de respuesta para Gemini."""
+    try:
+        if nombre == "buscar_en_libro":
+            chunks = await retrieve(shared.get("subject_id") or "libro-4g", args.get("consulta", ""), k=3)
+            return {"fragmentos": [c["content"] for c in chunks] or ["(sin resultados en el libro)"]}
+        # Las funciones de calendario requieren la sesión Google del usuario.
+        creds = await auth.credenciales_calendar(shared["user_id"]) if shared.get("autenticado") else None
+        if not creds:
+            return {"error": "El usuario no ha iniciado sesión con Google; no puedo usar su calendario."}
+        if nombre == "crear_evento":
+            inicio = datetime.fromisoformat(args["fecha_hora_iso"])
+            ev = await agenda.crear_evento_con_creds(
+                creds, inicio, calendar_id="primary",
+                duracion_min=int(args.get("duracion_min") or 60), resumen=args.get("titulo") or "Bloque")
+            await ws.send_text(json.dumps({"type": "booked", "ok": True, "event": ev}))
+            return {"ok": True, "evento": ev}
+        if nombre == "listar_eventos":
+            return {"eventos": await agenda.listar_eventos_con_creds(creds)}
+        if nombre == "borrar_evento":
+            return {"ok": await agenda.borrar_evento_con_creds(creds, args["event_id"])}
+        return {"error": f"función desconocida: {nombre}"}
+    except Exception as e:
+        logger.exception(f"[4g] error ejecutando función {nombre}")
+        return {"error": str(e)}
+
+
+async def _manejar_tool_call(tool_call, session, shared: dict, ws: WebSocket) -> None:
+    """Ejecuta las funciones que pide el modelo (Probador) y devuelve los resultados a Gemini."""
+    respuestas = []
+    for fc in (getattr(tool_call, "function_calls", None) or []):
+        args = dict(fc.args or {})
+        logger.info(f"[4g] tool_call {fc.name}({args})")
+        resultado = await _ejecutar_funcion(fc.name, args, shared, ws)
+        respuestas.append(types.FunctionResponse(id=fc.id, name=fc.name, response=resultado))
+    if respuestas:
+        await session.send_tool_response(function_responses=respuestas)
+
+
+async def _inyectar_probador(session, shared: dict) -> None:
+    """Modo PROBADOR: conversación libre con herramientas (RAG del libro + Calendar del usuario).
+    Para que el usuario valide solo el RAG y el agendado sin recorrer todo el Canva."""
+    if session is None:
+        return
+    shared["sec_idx"] = 10_000   # fuera del rango de SECCIONES → no se extrae nada del Canva
+    shared["presentado"] = True
+    txt = ("(MODO PROBADOR LIBRE. Olvida el guion de fases del Canva. Eres Faro, cálido y breve. "
+           "Tienes herramientas: buscar_en_libro (consulta el libro de Fabián y responde anclado a él; "
+           "si algo no está, dilo), y para el Google Calendar del usuario: crear_evento, listar_eventos y "
+           "borrar_evento. Cuando pregunten por el libro o el método, USA buscar_en_libro. Cuando pidan "
+           "agendar, ver o borrar citas, USA la herramienta y CONFIRMA por voz lo que hiciste (para borrar, "
+           "lista primero para localizar el id). Saluda en UNA frase e invita a probar: preguntar por el "
+           "libro o pedirte una cita.)")
+    shared["bot_speaking"] = True
+    try:
+        await session.send_client_content(
+            turns=[types.Content(role="user", parts=[types.Part(text=txt)])], turn_complete=True)
+        logger.info("[4g] modo PROBADOR en marcha")
+    except Exception:
+        logger.exception("[4g] no pude iniciar el probador")
+
+
 async def _control_4g(data: dict, session, shared: dict) -> None:
     """Mensajes de control del navegador propios del 4g. {type:'goto', idx, repasar}: el USUARIO inicia
     el apartado `idx` → relevamos al agente de ese bloque en la misma sesión (inicio manual). `repasar`
-    (botón «Repasar» sobre un bloque ya completo) hace que el agente solo ofrezca cambios, no reentreviste."""
+    (botón «Repasar» sobre un bloque ya completo) hace que el agente solo ofrezca cambios, no reentreviste.
+    {type:'probador'}: conversación libre con herramientas (RAG + Calendar)."""
+    if data.get("type") == "probador":
+        shared["_hablo_en_bloque"] = False
+        await _inyectar_probador(session, shared)
+        return
     if data.get("type") != "goto":
         return
     try:
@@ -323,6 +438,10 @@ async def _gemini_to_browser_4g(ws: WebSocket, session, shared: dict):
     try:
         while True:
             async for response in session.receive():
+                tc = getattr(response, "tool_call", None)
+                if tc:   # el modelo (Probador) pide ejecutar una herramienta
+                    await _manejar_tool_call(tc, session, shared, ws)
+                    continue
                 sc = response.server_content
                 if not sc:
                     continue
@@ -392,7 +511,7 @@ async def ws_4g(ws: WebSocket):
     fecha_str = _fecha_ctx()
     canva_prev = await canva4g.obtener_canva(user_id)
     cfg = _preparar_prompt(cfg, fecha_str, canva_prev)
-    model, live_config = _build_config(cfg)
+    model, live_config = _build_config(cfg, tools=TOOLS_PROBADOR)   # herramientas para el modo Probador
     vad = _vad_params(cfg)
 
     shared = {

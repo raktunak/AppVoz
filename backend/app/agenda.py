@@ -190,6 +190,43 @@ async def crear_evento_con_creds(
                                    resumen, descripcion, None, None, datos))
 
 
+def _listar_eventos_sync(service, calendar_id: str, desde: datetime, max_results: int) -> list[dict]:
+    res = service.events().list(
+        calendarId=calendar_id, timeMin=desde.isoformat(), singleEvents=True,
+        orderBy="startTime", maxResults=max_results,
+    ).execute()
+    out = []
+    for e in res.get("items", []):
+        st = e.get("start") or {}
+        out.append({"event_id": e["id"], "resumen": e.get("summary"),
+                    "inicio": st.get("dateTime") or st.get("date")})
+    return out
+
+
+def _borrar_evento_service_sync(service, calendar_id: str, event_id: str) -> bool:
+    try:
+        service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+        return True
+    except HttpError as e:
+        if e.resp is not None and e.resp.status in (404, 410):
+            return True
+        raise
+
+
+async def listar_eventos_con_creds(creds, *, calendar_id: str = "primary",
+                                   desde: datetime | None = None, max_results: int = 10) -> list[dict]:
+    """Próximos eventos del Calendar DEL USUARIO (id, resumen, inicio), ordenados por inicio."""
+    desde = _a_zona(desde) if desde else datetime.now(_tz())
+    return await asyncio.to_thread(
+        lambda: _listar_eventos_sync(_service_de_creds(creds), calendar_id, desde, max_results))
+
+
+async def borrar_evento_con_creds(creds, event_id: str, *, calendar_id: str = "primary") -> bool:
+    """Borra un evento del Calendar DEL USUARIO por su id. Idempotente."""
+    return await asyncio.to_thread(
+        lambda: _borrar_evento_service_sync(_service_de_creds(creds), calendar_id, event_id))
+
+
 async def buscar_eventos(calendar_id: str, telefono: str, desde: datetime | None = None) -> list[dict]:
     """Citas futuras de un cliente (por su teléfono), ordenadas por inicio. Para cancelar:
     se leen de vuelta y se confirma antes de borrar (no borramos a ciegas)."""
