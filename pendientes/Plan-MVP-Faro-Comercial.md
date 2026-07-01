@@ -239,19 +239,55 @@ Las tablas `sesiones` / `turnos` / `memoria_usuario` **ya existen** (`persistenc
 - Por intercambio: fila en `turnos` (user_text, bot_text; latencias opcionales).
 - **Guardar TODO el detalle** (decidido): cada intercambio va a `turnos` siempre (no solo un resumen).
 - **Resumen a demanda:** `memoria_usuario` se (re)genera con Gemini Flash cuando se necesita (al abrir la siguiente sesión o periódicamente), a partir de los turnos crudos — no obligatoriamente al cerrar.
+- **Acumular, no sobrescribir:** el resumen debe FUNDIR la sesión nueva en la memoria previa (hoy `resumir_sesion` la PISA). Diseño y mejoras del bucle → **§12.7**.
 - Esto **resuelve el pendiente histórico "la memoria no entra al prompt"**: aquí SÍ entra (§12.3.2) y SÍ se actualiza.
 
 ### 12.5 Pasos incrementales
 1. **Renombrar** Probador→Asistente (UI + control + `_inyectar_asistente`) + botón permanente en cabecera. *(rápido)*
 2. **Contexto del Canva** del usuario en el prompt. *Hito: "¿en qué me enfoco?" usa mis roles.*
 3. **Persistir** sesión + turnos del asistente. *Hito: filas en `sesiones`/`turnos`.*
-4. **Cerrar el bucle de memoria:** resumen al cerrar → `memoria_usuario` → inyectar en la siguiente sesión. *Hito: en una 2ª sesión, Faro recuerda algo de la 1ª.*
+4. **Cerrar el bucle de memoria:** resumen al cerrar → `memoria_usuario` → inyectar en la siguiente sesión. *Hito: en una 2ª sesión, Faro recuerda algo de la 1ª.* **Refinamiento: acumular en vez de sobrescribir + mejoras → §12.7.**
 
 ### 12.6 Decisiones (tomadas 2026-07-01)
 - **Ubicación → botón «🎙️ Habla con Faro» SIEMPRE VISIBLE en la cabecera** (accesible desde cualquier pantalla).
 - **Nombre → «🎙️ Habla con Faro».**
 - **Capacidades → consultar + agendar + MODIFICAR el Canva** (añadir/editar roles, objetivos, valores… por voz). Implica herramientas de **escritura** sobre el Canva (§12.3.4) + **confirmación por voz** antes de cambios destructivos.
 - **Memoria → guardar TODO el detalle** (cada intercambio en `turnos`) y **resumir a demanda** (no solo al cerrar). Más rico; asumimos coste/almacenamiento.
+
+### 12.7 Bucle de memoria (paso 5) — diseño y mejoras
+> **Estado (2026-07-01):** el paso 4 ya persiste turnos y dispara `resumir_sesion` al cerrar, así que el bucle está **parcialmente cerrado** — pero `resumir_sesion` hoy **SOBRESCRIBE** la memoria (cada sesión pisa el resumen anterior; solo incrementa `n_sesiones`). El paso 5 es un **refinamiento de cómo se resume**, no fontanería nueva (~1 función + prompt, sin tabla nueva).
+
+**Dos ejes de decisión:**
+- **Eje A — cómo acumular:** (1) *resumen rodante* **[recomendado]** = memoria actual + turnos de la sesión nueva → memoria fusionada (contexto acotado, barato, estable); (2) *re-resumir desde todos los turnos* (máxima fidelidad, pero crece sin límite → capar a últimas N sesiones); (3) *híbrido* (rodante + lista de hechos con dedup).
+- **Eje B — cuándo:** al **cerrar** (actual, simple, ya funciona) vs **a demanda** (regenerar al abrir la siguiente sesión / periódicamente; más fresco, pero añade algo de latencia al arranque).
+
+**Mejoras (a incorporar en el paso 5):**
+1. **Memoria estructurada, no prosa:** separar *perfil* durable (misión, cronófago, €/min, preferencias) de *estado* volátil (dudas y compromisos abiertos). El perfil casi no cambia; el estado rota.
+2. **Rastrear compromisos:** extraer lo que el usuario dijo que HARÍA y llevar `pendiente → hecho` entre sesiones (espíritu 4G "hacedores, no habladores").
+3. **Marca temporal:** items de memoria con fecha ("hace 2 semanas dijiste…") para que Faro pueda usar el tiempo (encaja con el gráfico "semanas de vida" que enamoró a Fabián).
+4. **No duplicar el Canva:** resumir sobre todo la **charla libre**; lo del onboarding guiado ya vive estructurado en `canva_4g`. Que el prompt de resumen priorice lo conversacional.
+5. **Protección ante fallo:** si el resumen de Gemini sale mal (JSON inválido / vacío), **NO pisar** la memoria buena existente (hoy sobrescribe a ciegas → riesgo de perderla).
+6. **Memoria visible/editable por el usuario:** que pueda ver "lo que Faro recuerda de ti" y corregirlo (confianza + control), y que esa edición retroalimente la memoria.
+
+**Detalles finos:** capar el crecimiento de `temas`/`dudas` (p.ej. top-10); recordar la FK `memoria_usuario.ultima_session_id → sesiones` (borrar la memoria ANTES que su sesión); el resumen sigue siendo best-effort (nunca rompe el cierre de la sesión).
+
+### 12.8 Reiniciar (reset) — soft-delete y visibilidad de conversaciones
+> **Decidido 2026-07-01. PRIORIDAD P0** — se implementa en la PRIMERA tanda, junto al núcleo del paso 5 (§12.7 P0: acumular + protección ante fallo).
+> Al pulsar «↺ Reiniciar»: el usuario ve borrón y cuenta nueva, pero **nada se pierde por detrás** y **NO se toca el Calendar/agenda**.
+
+**Requisitos:**
+- **NO afectar al Calendar/agenda:** reiniciar deja TODAS las citas intactas (las cree Faro o el usuario).
+- **Nosotros vemos las conversaciones ÍNTEGRAS** (lo que dice el usuario y lo que dice Faro), aunque el usuario haya reiniciado.
+
+**Lo que YA está (no hay que construir):**
+- Los turnos se guardan enteros: `user_text` + `bot_text` (paso 4). El reset **nunca** borra `sesiones`/`turnos` → sobreviven solos.
+- Endpoints de lectura ya existentes: `GET /api/live/sessions?user_id=<email>` (lista) y `GET /api/live/sessions/{id}` (sesión con todos sus turnos). Son genéricos → valen para las conversaciones con `via="4g"`.
+
+**Cambios en `/api/4g/reset` (`backend/app/onboarding_4g.py`):**
+1. **Quitar el borrado de Calendar.** *(Hoy busca por `telefono=user_id` en el calendario COMPARTIDO; el asistente crea en el `primary` del usuario SIN ese tag → ya casi no encuentra nada, pero se elimina el bloque para que sea rotundo.)*
+2. **Soft-delete del Canva:** en vez de `borrar_canva` (hard-delete), archivar un snapshot en una tabla nueva **`resets`** (`user_id`, `reset_at`, `snapshot` JSONB del Canva/memoria) y luego limpiar la fila viva. Así **sabemos que hubo reinicio** y **conservamos el estado previo**.
+
+**Decisión:** el **Canva SÍ se vacía** de cara al usuario (fresh start del PEP) pero **archivado**; el **Calendar NO se toca**; las **conversaciones se conservan y son visibles** por los endpoints. Es el patrón *soft-delete* ya validado (usuario ve limpio, nosotros retenemos todo y sabemos que hubo reset).
 
 ---
 

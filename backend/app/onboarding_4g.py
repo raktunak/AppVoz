@@ -59,6 +59,8 @@ TOOLS_ASISTENTE = [types.Tool(function_declarations=[
                     description="Inicio en ISO 8601 con offset, p.ej. 2026-07-02T10:00:00+02:00."),
                 "duracion_min": types.Schema(type=types.Type.INTEGER,
                     description="Duración en minutos (por defecto 60)."),
+                "recordatorio_min": types.Schema(type=types.Type.INTEGER,
+                    description="Alarma: minutos antes del evento para avisar (p.ej. 10). Omitir si no piden alarma."),
             },
             required=["titulo", "fecha_hora_iso"],
         ),
@@ -77,6 +79,26 @@ TOOLS_ASISTENTE = [types.Tool(function_declarations=[
             type=types.Type.OBJECT,
             properties={"event_id": types.Schema(type=types.Type.STRING,
                         description="ID del evento a borrar.")},
+            required=["event_id"],
+        ),
+    ),
+    types.FunctionDeclaration(
+        name="modificar_evento",
+        description="Modifica un evento YA existente del Google Calendar del usuario: cambiar título, "
+                    "hora, duración y/o poner una alarma. Obtén el event_id antes con listar_eventos. "
+                    "Solo se cambian los campos que envíes; el resto se conserva.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "event_id": types.Schema(type=types.Type.STRING, description="ID del evento a modificar."),
+                "titulo": types.Schema(type=types.Type.STRING, description="Nuevo título (omitir si no cambia)."),
+                "fecha_hora_iso": types.Schema(type=types.Type.STRING,
+                    description="Nuevo inicio en ISO 8601 con offset (omitir si no cambia la hora)."),
+                "duracion_min": types.Schema(type=types.Type.INTEGER,
+                    description="Nueva duración en minutos (omitir si no cambia)."),
+                "recordatorio_min": types.Schema(type=types.Type.INTEGER,
+                    description="Alarma: minutos antes para avisar (p.ej. 10). Omitir si no cambia."),
+            },
             required=["event_id"],
         ),
     ),
@@ -250,13 +272,23 @@ async def _ejecutar_funcion(nombre: str, args: dict, shared: dict, ws: WebSocket
             return {"error": "El usuario no ha iniciado sesión con Google; no puedo usar su calendario."}
         if nombre == "crear_evento":
             inicio = datetime.fromisoformat(args["fecha_hora_iso"])
+            rec = args.get("recordatorio_min")
             ev = await agenda.crear_evento_con_creds(
                 creds, inicio, calendar_id="primary",
-                duracion_min=int(args.get("duracion_min") or 60), resumen=args.get("titulo") or "Bloque")
+                duracion_min=int(args.get("duracion_min") or 60), resumen=args.get("titulo") or "Bloque",
+                recordatorio_min=int(rec) if rec is not None else None)
             await ws.send_text(json.dumps({"type": "booked", "ok": True, "event": ev}))
             return {"ok": True, "evento": ev}
         if nombre == "listar_eventos":
             return {"eventos": await agenda.listar_eventos_con_creds(creds)}
+        if nombre == "modificar_evento":
+            fecha, dur, rec = args.get("fecha_hora_iso"), args.get("duracion_min"), args.get("recordatorio_min")
+            ev = await agenda.modificar_evento_con_creds(
+                creds, args["event_id"], calendar_id="primary", titulo=args.get("titulo"),
+                inicio=datetime.fromisoformat(fecha) if fecha else None,
+                duracion_min=int(dur) if dur is not None else None,
+                recordatorio_min=int(rec) if rec is not None else None)
+            return {"ok": True, "evento": ev}
         if nombre == "borrar_evento":
             return {"ok": await agenda.borrar_evento_con_creds(creds, args["event_id"])}
         return {"error": f"función desconocida: {nombre}"}
@@ -298,10 +330,13 @@ def _prompt_asistente(shared: dict) -> str:
     partes = [
         "(CHARLA LIBRE CON FARO. Olvida el guion de fases del Canva. Eres Faro, cálido y breve. "
         "Tienes herramientas: buscar_en_libro (consulta el libro de Fabián y responde anclado a él; "
-        "si algo no está, dilo), y para el Google Calendar del usuario: crear_evento, listar_eventos y "
-        "borrar_evento. Cuando pregunten por el libro o el método, USA buscar_en_libro. Cuando pidan "
-        "agendar, ver o borrar citas, USA la herramienta y CONFIRMA por voz lo que hiciste (para borrar, "
-        "lista primero para localizar el id)."
+        "si algo no está, dilo), y para el Google Calendar del usuario: crear_evento (con alarma "
+        "opcional recordatorio_min), listar_eventos, modificar_evento y borrar_evento. Cuando pregunten "
+        "por el libro o el método, USA buscar_en_libro. Cuando pidan agendar, ver, cambiar o borrar citas, "
+        "o poner una alarma, USA la herramienta adecuada. Para MODIFICAR o BORRAR, primero lista para "
+        "localizar el event_id y CONFIRMA por voz el cambio ANTES de aplicarlo; después confirma lo hecho. "
+        "Para una alarma en una cita nueva usa recordatorio_min al crearla; en una existente, "
+        "modificar_evento con recordatorio_min."
     ]
     # CONTEXTO del usuario: que Faro sepa de él (su Plataforma Estratégica Personal + lo que recuerda).
     resumen = canva4g.resumen_canva(shared.get("canva"))
@@ -624,25 +659,33 @@ async def ws_4g(ws: WebSocket):
 
 @router.post("/api/4g/reset")
 async def reset_4g(payload: dict):
-    """Reinicia el onboarding de un usuario PARA PRUEBAS: borra su Canva (tabla canva_4g) y
-    sus citas de Calendar creadas por el 4g (las que llevan su user_id). Solo afecta a ese
-    user_id, no a otros usuarios de prueba."""
+    """Reinicia (SOFT-DELETE) el Canva y la memoria de un usuario: el usuario ve borrón y cuenta
+    nueva, pero NADA se pierde por detrás. Se archiva un snapshot (Canva + memoria) en `resets`
+    ANTES de limpiar, y las conversaciones (`sesiones`/`turnos`) NO se tocan (visibles solo para
+    nosotros). El Google Calendar del usuario TAMPOCO se toca (sus citas quedan intactas)."""
     user_id = (payload.get("user_id") or "").strip()
     if not user_id:
         return {"ok": False, "error": "falta user_id"}
-    borrados = 0
-    cal = settings.calendar_id
-    if cal:
-        try:
-            desde = datetime(2020, 1, 1, tzinfo=ZoneInfo(settings.agenda_timezone))
-            for e in await agenda.buscar_eventos(cal, user_id, desde):
-                if await agenda.borrar_evento(cal, e["event_id"]):
-                    borrados += 1
-        except Exception:
-            logger.exception("[4g] reset: fallo borrando eventos de Calendar")
+    # 1) Snapshot del estado previo. Si archivar falla, ABORTAMOS (no limpiamos → sin pérdida).
+    canva = await canva4g.obtener_canva(user_id)
+    try:
+        memoria = await persistence.obtener_memoria(user_id, "libro-4g")
+    except Exception:
+        memoria = None
+    try:
+        reset_id = await persistence.registrar_reset(user_id, canva, memoria)
+    except Exception:
+        logger.exception("[4g] reset: no pude archivar el snapshot; ABORTO para no perder datos")
+        return {"ok": False, "error": "no pude archivar el estado; no se reinició"}
+    # 2) Limpiar la vista del usuario (Canva + memoria). Calendar y conversaciones INTACTOS.
     await canva4g.borrar_canva(user_id)
-    logger.info(f"[4g] reset user={user_id}: Canva borrado, {borrados} evento(s) de Calendar")
-    return {"ok": True, "eventos_borrados": borrados}
+    try:
+        await persistence.borrar_memoria(user_id)
+    except Exception:
+        logger.exception("[4g] reset: no pude limpiar la memoria (snapshot ya archivado)")
+    logger.info(f"[4g] reset user={user_id}: Canva+memoria archivados (reset id={reset_id}) y limpiados; "
+                f"Calendar y conversaciones INTACTOS")
+    return {"ok": True, "reset_id": reset_id}
 
 
 @router.get("/api/4g/canva")

@@ -84,10 +84,19 @@ def _a_zona(dt: datetime) -> datetime:
 # Núcleo síncrono (googleapiclient es sync). No llamar desde el event-loop:
 # usar los envoltorios async de más abajo.
 # --------------------------------------------------------------------------- #
+def _reminders_body(recordatorio_min: int | None) -> dict | None:
+    """Bloque `reminders` para el body de Calendar: alarma popup N minutos antes. None = no tocar
+    (el evento hereda los recordatorios por defecto del calendario)."""
+    if recordatorio_min is None:
+        return None
+    return {"useDefault": False,
+            "overrides": [{"method": "popup", "minutes": int(recordatorio_min)}]}
+
+
 def _crear_evento_sync(
     service, calendar_id: str, inicio: datetime, duracion_min: int, resumen: str,
     descripcion: str | None, telefono: str | None, nombre: str | None,
-    datos: dict | None,
+    datos: dict | None, recordatorio_min: int | None = None,
 ) -> dict:
     inicio = _a_zona(inicio)
     fin = inicio + timedelta(minutes=duracion_min)
@@ -107,6 +116,9 @@ def _crear_evento_sync(
         "end": {"dateTime": fin.isoformat(), "timeZone": tz_name},
         "extendedProperties": {"private": private},
     }
+    reminders = _reminders_body(recordatorio_min)
+    if reminders:
+        body["reminders"] = reminders
     ev = service.events().insert(calendarId=calendar_id, body=body).execute()
     logger.info(f"[agenda] cita creada id={ev['id']} inicio={inicio.isoformat()} cal={calendar_id}")
     return {
@@ -168,26 +180,29 @@ def _service_de_creds(creds):
 async def crear_evento(
     calendar_id: str, inicio: datetime, *, duracion_min: int = 30, resumen: str | None = None,
     descripcion: str | None = None, telefono: str | None = None, nombre: str | None = None,
-    datos: dict | None = None,
+    datos: dict | None = None, recordatorio_min: int | None = None,
 ) -> dict:
     """Crea una cita con la SERVICE ACCOUNT (calendario compartido). `inicio` puede venir
-    naive (se asume zona de la agenda) o aware. Si no se pasa `resumen`, se arma uno básico."""
+    naive (se asume zona de la agenda) o aware. Si no se pasa `resumen`, se arma uno básico.
+    `recordatorio_min`: alarma popup N minutos antes (None = recordatorios por defecto)."""
     resumen = resumen or (f"Cita: {nombre}" if nombre else "Cita")
     return await asyncio.to_thread(
         lambda: _crear_evento_sync(_get_service(), calendar_id, inicio, duracion_min, resumen,
-                                   descripcion, telefono, nombre, datos))
+                                   descripcion, telefono, nombre, datos, recordatorio_min))
 
 
 async def crear_evento_con_creds(
     creds, inicio: datetime, *, calendar_id: str = "primary", duracion_min: int = 30,
     resumen: str | None = None, descripcion: str | None = None, datos: dict | None = None,
+    recordatorio_min: int | None = None,
 ) -> dict:
     """Crea una cita en el Google Calendar DEL USUARIO con sus credenciales OAuth propias.
-    `calendar_id='primary'` = su calendario principal. Cliente y alta van en un hilo."""
+    `calendar_id='primary'` = su calendario principal. Cliente y alta van en un hilo.
+    `recordatorio_min`: alarma popup N minutos antes (None = recordatorios por defecto)."""
     resumen = resumen or "Bloque (4G)"
     return await asyncio.to_thread(
         lambda: _crear_evento_sync(_service_de_creds(creds), calendar_id, inicio, duracion_min,
-                                   resumen, descripcion, None, None, datos))
+                                   resumen, descripcion, None, None, datos, recordatorio_min))
 
 
 def _listar_eventos_sync(service, calendar_id: str, desde: datetime, max_results: int) -> list[dict]:
@@ -225,6 +240,63 @@ async def borrar_evento_con_creds(creds, event_id: str, *, calendar_id: str = "p
     """Borra un evento del Calendar DEL USUARIO por su id. Idempotente."""
     return await asyncio.to_thread(
         lambda: _borrar_evento_service_sync(_service_de_creds(creds), calendar_id, event_id))
+
+
+def _parse_ev_dt(node: dict | None) -> datetime | None:
+    """Extrae el datetime de un start/end de Calendar (dateTime con hora, o date all-day)."""
+    if not node:
+        return None
+    v = node.get("dateTime") or node.get("date")
+    return datetime.fromisoformat(v) if v else None
+
+
+def _modificar_evento_sync(
+    service, calendar_id: str, event_id: str, titulo: str | None, inicio: datetime | None,
+    duracion_min: int | None, recordatorio_min: int | None,
+) -> dict:
+    """PATCH parcial: solo se envían los campos indicados. Para tocar la hora/duración leemos el
+    evento y completamos lo que no venga (mover conserva duración; recortar conserva inicio)."""
+    tz_name = settings.agenda_timezone
+    cambios: dict = {}
+    if titulo is not None:
+        cambios["summary"] = titulo
+    reminders = _reminders_body(recordatorio_min)
+    if reminders:
+        cambios["reminders"] = reminders
+    if inicio is not None or duracion_min is not None:
+        actual = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        ini_act = _parse_ev_dt(actual.get("start"))
+        fin_act = _parse_ev_dt(actual.get("end"))
+        dur_act = int((fin_act - ini_act).total_seconds() // 60) if (ini_act and fin_act) else 60
+        nuevo_ini = _a_zona(inicio) if inicio is not None else ini_act
+        nueva_dur = int(duracion_min) if duracion_min is not None else dur_act
+        nuevo_fin = nuevo_ini + timedelta(minutes=nueva_dur)
+        cambios["start"] = {"dateTime": nuevo_ini.isoformat(), "timeZone": tz_name}
+        cambios["end"] = {"dateTime": nuevo_fin.isoformat(), "timeZone": tz_name}
+    if not cambios:
+        raise ValueError("modificar_evento: no se indicó ningún cambio")
+    ev = service.events().patch(calendarId=calendar_id, eventId=event_id, body=cambios).execute()
+    logger.info(f"[agenda] cita modificada id={event_id} campos={list(cambios)} cal={calendar_id}")
+    return {
+        "event_id": ev["id"],
+        "html_link": ev.get("htmlLink"),
+        "resumen": ev.get("summary"),
+        "inicio": (ev.get("start") or {}).get("dateTime"),
+        "fin": (ev.get("end") or {}).get("dateTime"),
+    }
+
+
+async def modificar_evento_con_creds(
+    creds, event_id: str, *, calendar_id: str = "primary", titulo: str | None = None,
+    inicio: datetime | None = None, duracion_min: int | None = None,
+    recordatorio_min: int | None = None,
+) -> dict:
+    """Modifica (patch parcial) un evento del Calendar DEL USUARIO: título, hora, duración y/o
+    recordatorio (alarma). Solo toca los campos indicados; al mover conserva la duración original
+    y al recortar conserva el inicio (leyendo el evento si hace falta)."""
+    return await asyncio.to_thread(
+        lambda: _modificar_evento_sync(_service_de_creds(creds), calendar_id, event_id,
+                                       titulo, inicio, duracion_min, recordatorio_min))
 
 
 async def buscar_eventos(calendar_id: str, telefono: str, desde: datetime | None = None) -> list[dict]:

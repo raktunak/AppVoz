@@ -83,6 +83,17 @@ _DDL = [
         UNIQUE (user_id, subject_id)
     )
     """,
+    # Archivo de reinicios (soft-delete): al pulsar «Reiniciar» el usuario ve borrón y cuenta
+    # nueva, pero guardamos aquí un snapshot del Canva + memoria previos (nada se pierde por detrás).
+    """
+    CREATE TABLE IF NOT EXISTS resets (
+        id        BIGSERIAL PRIMARY KEY,
+        user_id   TEXT NOT NULL,
+        reset_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        canva     JSONB,
+        memoria   JSONB
+    )
+    """,
     # Config activa para las llamadas TELEFÓNICAS (Telnyx): una sola fila (id=1) con
     # el cfg que arma el panel (voz, modelo, persona, idioma, VAD…). El relay de Telnyx
     # la lee al arrancar para que el teléfono use lo seleccionado en el panel.
@@ -114,6 +125,7 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_sesiones_subject ON sesiones (subject_id)",
     "CREATE INDEX IF NOT EXISTS idx_turnos_session ON turnos (session_id)",
     "CREATE INDEX IF NOT EXISTS idx_turnos_ts ON turnos (ts)",
+    "CREATE INDEX IF NOT EXISTS idx_resets_user ON resets (user_id)",
 ]
 
 
@@ -203,6 +215,42 @@ async def cerrar_sesion(session_id: int, n_turnos: int) -> None:
             ),
             {"n": n_turnos, "id": session_id},
         )
+
+
+# --------------------------------------------------------------------------- #
+# Reinicio (soft-delete): archivar el estado previo y limpiar la vista del usuario.
+# Las conversaciones (sesiones/turnos) NO se tocan: se conservan y quedan visibles solo
+# para nosotros (endpoints admin). El Google Calendar del usuario tampoco se toca.
+# --------------------------------------------------------------------------- #
+async def registrar_reset(user_id: str, canva: dict | None, memoria: dict | None) -> int:
+    """Archiva un snapshot (Canva + memoria) del estado previo a un «Reiniciar» y devuelve su id.
+    Así sabemos que hubo reinicio y conservamos lo que había, aunque el usuario vea borrón y cuenta
+    nueva. Se llama ANTES de limpiar (si esto falla, no se limpia → no hay pérdida)."""
+    async with engine.begin() as conn:
+        nuevo_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO resets (user_id, canva, memoria) "
+                    "VALUES (:u, CAST(:c AS jsonb), CAST(:m AS jsonb)) RETURNING id"
+                ),
+                {
+                    "u": user_id,
+                    "c": json.dumps(canva) if canva is not None else None,
+                    "m": json.dumps(memoria) if memoria is not None else None,
+                },
+            )
+        ).scalar_one()
+    return int(nuevo_id)
+
+
+async def borrar_memoria(user_id: str) -> int:
+    """Borra la memoria acumulada de un usuario (todas sus materias). Devuelve nº de filas.
+    Usada por el reset: la vista del usuario queda a cero (el snapshot ya se archivó en `resets`)."""
+    async with engine.begin() as conn:
+        res = await conn.execute(
+            text("DELETE FROM memoria_usuario WHERE user_id = :u"), {"u": user_id}
+        )
+    return res.rowcount or 0
 
 
 # --------------------------------------------------------------------------- #
@@ -464,23 +512,34 @@ async def obtener_memoria(user_id: str, subject_id: str) -> dict | None:
 # Resumen + memoria — BEST-EFFORT: nunca lanza (todo en try/except con loguru).
 # --------------------------------------------------------------------------- #
 _RESUMEN_PROMPT = (
-    "Eres un asistente que resume una sesión de tutoría por voz para guardarla "
-    "como memoria del alumno. A partir de la transcripción (usuario y tutor), "
-    "devuelve EXCLUSIVAMENTE un JSON válido con esta forma exacta:\n"
-    '{"resumen": "<resumen breve de 1-3 frases>", '
+    "Eres un asistente que MANTIENE la memoria acumulada de un alumno en su formación por voz. "
+    "Recibes (a) la MEMORIA PREVIA que ya tenías de él (puede estar vacía) y (b) la TRANSCRIPCIÓN "
+    "de la sesión más reciente. Devuelve la memoria ACTUALIZADA que INTEGRA lo nuevo con lo previo: "
+    "funde lo que se solape, NO repitas, elimina las dudas que ya se resolvieron y prioriza lo "
+    "relevante para acompañarle. Máximo 8 temas y 8 dudas (los más importantes/recientes). Devuelve "
+    "EXCLUSIVAMENTE un JSON válido con esta forma exacta:\n"
+    '{"resumen": "<resumen acumulado de 1-4 frases>", '
     '"temas": ["<tema>", ...], '
     '"dudas": ["<duda no resuelta>", ...]}\n'
     "No añadas texto fuera del JSON. Si no hay dudas, usa una lista vacía.\n\n"
-    "Transcripción:\n"
 )
 
 
-def _resumir_sync(transcripcion: str) -> dict:
-    """Llama a Gemini Flash y parsea el JSON del resumen (síncrono; se invoca en
-    un hilo desde la corutina). Pide salida JSON al modelo."""
+def _resumir_sync(transcripcion: str, previa: dict | None) -> dict:
+    """Llama a Gemini Flash y parsea el JSON de la memoria ACTUALIZADA: FUNDE la memoria previa con
+    la sesión nueva (acumula, no reemplaza). Síncrono; se invoca en un hilo desde la corutina."""
+    mem_previa = "(sin memoria previa)"
+    if previa:
+        mem_previa = json.dumps({
+            "resumen": previa.get("resumen") or "",
+            "temas": previa.get("temas") or [],
+            "dudas": previa.get("dudas") or [],
+        }, ensure_ascii=False)
+    contenido = (_RESUMEN_PROMPT + "MEMORIA PREVIA:\n" + mem_previa
+                 + "\n\nTRANSCRIPCIÓN DE LA SESIÓN NUEVA:\n" + transcripcion)
     resp = _client.models.generate_content(
         model=RESUMEN_MODEL,
-        contents=_RESUMEN_PROMPT + transcripcion,
+        contents=contenido,
         config=types.GenerateContentConfig(response_mime_type="application/json"),
     )
     return json.loads(resp.text)
@@ -521,7 +580,14 @@ async def resumir_sesion(session_id: int) -> None:
         subject_id = ses["subject_id"]
         user_id = ses["user_id"]
 
-        # 2) Construir la transcripción y pedir el resumen a Gemini (en hilo).
+        # Memoria PREVIA, para ACUMULAR en vez de sobrescribir. Best-effort: si falla, seguimos sin ella.
+        try:
+            previa = await obtener_memoria(user_id, subject_id)
+        except Exception:
+            logger.exception(f"resumir_sesion: no pude leer la memoria previa (sesión {session_id})")
+            previa = None
+
+        # 2) Construir la transcripción y pedir la memoria ACTUALIZADA a Gemini (en hilo).
         lineas = []
         for f in filas:
             if f["user_text"]:
@@ -530,10 +596,16 @@ async def resumir_sesion(session_id: int) -> None:
                 lineas.append(f"Tutor: {f['bot_text']}")
         transcripcion = "\n".join(lineas)
 
-        datos = await asyncio.to_thread(_resumir_sync, transcripcion)
-        resumen = datos.get("resumen") or ""
-        temas = datos.get("temas") or []
-        dudas = datos.get("dudas") or []
+        datos = await asyncio.to_thread(_resumir_sync, transcripcion, previa)
+        resumen = (datos.get("resumen") or "").strip()
+        temas = (datos.get("temas") or [])[:8]   # cap defensivo: evita que la memoria crezca sin fin
+        dudas = (datos.get("dudas") or [])[:8]
+
+        # PROTECCIÓN ANTE FALLO: si el resumen viene vacío/degenerado, NO pisamos la memoria buena.
+        # (Un fallo de parseo del modelo salta al except de abajo → tampoco escribe → memoria intacta.)
+        if not resumen:
+            logger.warning(f"resumir_sesion: resumen vacío; conservo la memoria previa (sesión {session_id})")
+            return
 
         # 3) UPSERT en memoria_usuario por (user_id, subject_id).
         async with engine.begin() as conn:
