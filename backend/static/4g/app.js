@@ -286,29 +286,34 @@ async function iniciarBloque(idx) {
     (SECCIONES[idx] ? SECCIONES[idx].titulo : "") + "» — escucha y responde.");
 }
 
-// MODO PROBADOR: charla libre con herramientas (RAG del libro + Calendar por voz). No toca el Canva.
-async function iniciarProbador() {
+// «HABLA CON FARO» (antes «Probador»): charla libre con herramientas (RAG del libro + Calendar por
+// voz). No toca el Canva. Copiloto siempre disponible desde el botón de cabecera (o la tarjeta).
+async function iniciarAsistente() {
   if (!connected) {
     setStatus("Conectando…");
     try { await connect(); } catch (e) { setStatus("No pude conectar: " + e); stop(); return; }
   }
   if (!ws || ws.readyState !== 1) { setStatus("Conexión no lista; pulsa de nuevo."); return; }
-  ws.send(JSON.stringify({ type: "probador" }));
+  ws.send(JSON.stringify({ type: "asistente" }));
   micActivo = true; ACTIVA = -1; curWho = null; curBubble = null;
-  renderStepper(); renderCanva(); setProbadorBtn(true);
-  setStatus("🧪 Probador — pregúntale por el libro o pídele agendar/ver/borrar una cita.");
+  renderStepper(); renderCanva(); setFaroBtn(true);
+  setStatus("🎙️ Habla con Faro — pregúntale por el libro o pídele agendar/ver/borrar una cita.");
 }
-// El botón del Probador ALTERNA: ▶ Empezar ↔ ⏹ Parar (rojo cuando está en marcha).
-function setProbadorBtn(on) {
-  const b = $("btnProbador");
-  if (!b) return;
-  b.textContent = on ? "⏹ Parar" : "▶ Empezar";
-  b.classList.toggle("pausar", on);
+// Los dos botones de Faro (cabecera + tarjeta) ALTERNAN ▶ Empezar ↔ ⏹ Parar y comparten estado.
+function setFaroBtn(on) {
+  const head = $("btnFaro");
+  if (head) { head.textContent = on ? "⏹ Parar" : "🎙️ Habla con Faro"; head.classList.toggle("on", on); }
+  const card = $("btnFaroCard");
+  if (card) { card.textContent = on ? "⏹ Parar" : "▶ Empezar"; card.classList.toggle("pausar", on); }
 }
-const _btnProb = $("btnProbador");
-if (_btnProb) _btnProb.addEventListener("click", () => {
-  if (_btnProb.classList.contains("pausar")) { stop(); setStatus("⏹ Conversación detenida."); }
-  else iniciarProbador();
+// Un solo handler para ambos botones: si hay conversación en marcha, para; si no, arranca.
+function toggleFaro() {
+  if (micActivo) { stop(); setStatus("⏹ Conversación detenida."); }
+  else iniciarAsistente();
+}
+["btnFaro", "btnFaroCard"].forEach((id) => {
+  const b = $(id);
+  if (b) b.addEventListener("click", toggleFaro);
 });
 
 function stop() {
@@ -319,7 +324,7 @@ function stop() {
   try { ws && ws.close(); } catch (e) {}
   flushPlayback();
   micNode = micStream = micCtx = null; ws = null; ACTIVA = -1;
-  renderStepper(); renderCanva(); setProbadorBtn(false);
+  renderStepper(); renderCanva(); setFaroBtn(false);
   setStatus("Sesión finalizada. Tu Canva queda guardado.");
 }
 

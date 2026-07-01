@@ -34,9 +34,9 @@ router = APIRouter()
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 
-# Herramientas (function-calling) del modo PROBADOR: consultar el libro (RAG) y gestionar el
-# Google Calendar del usuario. Es el cimiento de la "acción por voz" (Fase 2).
-TOOLS_PROBADOR = [types.Tool(function_declarations=[
+# Herramientas (function-calling) del ASISTENTE «Habla con Faro»: consultar el libro (RAG) y gestionar
+# el Google Calendar del usuario. Es el cimiento de la "acción por voz" (Fase 2).
+TOOLS_ASISTENTE = [types.Tool(function_declarations=[
     types.FunctionDeclaration(
         name="buscar_en_libro",
         description="Busca en el libro 'La Agenda de Cuarta Generación' de Fabián González para "
@@ -239,7 +239,7 @@ async def _invitar_siguiente(session, shared: dict, idx: int) -> None:
 
 
 async def _ejecutar_funcion(nombre: str, args: dict, shared: dict, ws: WebSocket) -> dict:
-    """Ejecuta una herramienta del Probador y devuelve el dict de respuesta para Gemini."""
+    """Ejecuta una herramienta del asistente Faro y devuelve el dict de respuesta para Gemini."""
     try:
         if nombre == "buscar_en_libro":
             chunks = await retrieve(shared.get("subject_id") or "libro-4g", args.get("consulta", ""), k=3)
@@ -266,7 +266,7 @@ async def _ejecutar_funcion(nombre: str, args: dict, shared: dict, ws: WebSocket
 
 
 async def _manejar_tool_call(tool_call, session, shared: dict, ws: WebSocket) -> None:
-    """Ejecuta las funciones que pide el modelo (Probador) y devuelve los resultados a Gemini."""
+    """Ejecuta las funciones que pide el modelo (asistente Faro) y devuelve los resultados a Gemini."""
     respuestas = []
     for fc in (getattr(tool_call, "function_calls", None) or []):
         args = dict(fc.args or {})
@@ -277,37 +277,74 @@ async def _manejar_tool_call(tool_call, session, shared: dict, ws: WebSocket) ->
         await session.send_tool_response(function_responses=respuestas)
 
 
-async def _inyectar_probador(session, shared: dict) -> None:
-    """Modo PROBADOR: conversación libre con herramientas (RAG del libro + Calendar del usuario).
-    Para que el usuario valide solo el RAG y el agendado sin recorrer todo el Canva."""
+def _texto_memoria(mem: dict | None) -> str:
+    """Aplana la memoria acumulada (resumen + temas + dudas) a una frase para inyectar en el prompt."""
+    if not mem:
+        return ""
+    partes = []
+    if mem.get("resumen"):
+        partes.append(mem["resumen"].strip())
+    if mem.get("temas"):
+        partes.append("Temas ya tratados: " + ", ".join(mem["temas"]) + ".")
+    if mem.get("dudas"):
+        partes.append("Dudas o temas pendientes: " + ", ".join(mem["dudas"]) + ".")
+    return " ".join(partes)
+
+
+def _prompt_asistente(shared: dict) -> str:
+    """Construye el prompt del asistente: consignas de herramientas + CONTEXTO del usuario (su
+    Canva/PEP + memoria acumulada), para que Faro responda sobre SU vida y no solo sobre el libro
+    ("¿en qué me enfoco esta semana según mis roles?"). Puro (sin efectos) para poder testearlo."""
+    partes = [
+        "(CHARLA LIBRE CON FARO. Olvida el guion de fases del Canva. Eres Faro, cálido y breve. "
+        "Tienes herramientas: buscar_en_libro (consulta el libro de Fabián y responde anclado a él; "
+        "si algo no está, dilo), y para el Google Calendar del usuario: crear_evento, listar_eventos y "
+        "borrar_evento. Cuando pregunten por el libro o el método, USA buscar_en_libro. Cuando pidan "
+        "agendar, ver o borrar citas, USA la herramienta y CONFIRMA por voz lo que hiciste (para borrar, "
+        "lista primero para localizar el id)."
+    ]
+    # CONTEXTO del usuario: que Faro sepa de él (su Plataforma Estratégica Personal + lo que recuerda).
+    resumen = canva4g.resumen_canva(shared.get("canva"))
+    if resumen:
+        partes.append(
+            "LO QUE YA SABES DE ESTA PERSONA (su Plataforma Estratégica Personal): " + resumen +
+            " Úsalo para responder sobre SU vida (sus roles, objetivos y prioridades), no solo el libro.")
+    memoria = shared.get("memoria")
+    if memoria:
+        partes.append("RECUERDAS de conversaciones anteriores con ella: " + memoria)
+    saludo = "Saluda en UNA frase"
+    if resumen or memoria:
+        saludo += " y, como ya la conoces, personaliza el saludo con algo suyo"
+    partes.append(saludo + ". Invita a preguntar por el libro, pedirte una cita, o algo de su plan.)")
+    return " ".join(partes)
+
+
+async def _inyectar_asistente(session, shared: dict) -> None:
+    """Asistente «Habla con Faro»: conversación libre con herramientas (RAG del libro + Calendar del
+    usuario). Copiloto siempre disponible; no recorre el guion de fases del Canva. Le inyecta el
+    CONTEXTO del usuario (su Canva/PEP + memoria) vía `_prompt_asistente`."""
     if session is None:
         return
     shared["sec_idx"] = 10_000   # fuera del rango de SECCIONES → no se extrae nada del Canva
     shared["presentado"] = True
-    txt = ("(MODO PROBADOR LIBRE. Olvida el guion de fases del Canva. Eres Faro, cálido y breve. "
-           "Tienes herramientas: buscar_en_libro (consulta el libro de Fabián y responde anclado a él; "
-           "si algo no está, dilo), y para el Google Calendar del usuario: crear_evento, listar_eventos y "
-           "borrar_evento. Cuando pregunten por el libro o el método, USA buscar_en_libro. Cuando pidan "
-           "agendar, ver o borrar citas, USA la herramienta y CONFIRMA por voz lo que hiciste (para borrar, "
-           "lista primero para localizar el id). Saluda en UNA frase e invita a probar: preguntar por el "
-           "libro o pedirte una cita.)")
+    txt = _prompt_asistente(shared)
     shared["bot_speaking"] = True
     try:
         await session.send_client_content(
             turns=[types.Content(role="user", parts=[types.Part(text=txt)])], turn_complete=True)
-        logger.info("[4g] modo PROBADOR en marcha")
+        logger.info("[4g] asistente «Habla con Faro» en marcha")
     except Exception:
-        logger.exception("[4g] no pude iniciar el probador")
+        logger.exception("[4g] no pude iniciar el asistente")
 
 
 async def _control_4g(data: dict, session, shared: dict) -> None:
     """Mensajes de control del navegador propios del 4g. {type:'goto', idx, repasar}: el USUARIO inicia
     el apartado `idx` → relevamos al agente de ese bloque en la misma sesión (inicio manual). `repasar`
     (botón «Repasar» sobre un bloque ya completo) hace que el agente solo ofrezca cambios, no reentreviste.
-    {type:'probador'}: conversación libre con herramientas (RAG + Calendar)."""
-    if data.get("type") == "probador":
+    {type:'asistente'} (alias 'probador'): conversación libre con herramientas (RAG + Calendar)."""
+    if data.get("type") in ("asistente", "probador"):   # 'probador' = alias temporal (compat)
         shared["_hablo_en_bloque"] = False
-        await _inyectar_probador(session, shared)
+        await _inyectar_asistente(session, shared)
         return
     if data.get("type") != "goto":
         return
@@ -439,7 +476,7 @@ async def _gemini_to_browser_4g(ws: WebSocket, session, shared: dict):
         while True:
             async for response in session.receive():
                 tc = getattr(response, "tool_call", None)
-                if tc:   # el modelo (Probador) pide ejecutar una herramienta
+                if tc:   # el modelo (asistente Faro) pide ejecutar una herramienta
                     await _manejar_tool_call(tc, session, shared, ws)
                     continue
                 sc = response.server_content
@@ -510,14 +547,20 @@ async def ws_4g(ws: WebSocket):
     cfg, subject_id = await _cargar_cfg_4g()
     fecha_str = _fecha_ctx()
     canva_prev = await canva4g.obtener_canva(user_id)
+    try:   # memoria acumulada del usuario (la inyecta el asistente para "recordarte"). Best-effort.
+        memoria = await persistence.obtener_memoria(user_id, subject_id)
+    except Exception:
+        logger.exception("[4g] no pude leer la memoria del usuario")
+        memoria = None
     cfg = _preparar_prompt(cfg, fecha_str, canva_prev)
-    model, live_config = _build_config(cfg, tools=TOOLS_PROBADOR)   # herramientas para el modo Probador
+    model, live_config = _build_config(cfg, tools=TOOLS_ASISTENTE)   # herramientas del asistente Faro
     vad = _vad_params(cfg)
 
     shared = {
         "bot_speaking": False, "user_id": user_id, "autenticado": autenticado,
         "subject_id": subject_id,
         "canva": canva_prev or {}, "sec_idx": canva4g.primera_incompleta(canva_prev),
+        "memoria": _texto_memoria(memoria),   # contexto del usuario para el asistente (paso 3)
         "fecha_str": fecha_str, "conv": "", "_last": None,
         "no_barge": True,   # anti-eco: el micro se ignora mientras Faro habla
         "_captura_turno": True,   # guarda el audio de cada turno para el STT fiable de respaldo

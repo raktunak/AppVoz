@@ -229,7 +229,9 @@ async def callback(request: Request):
 async def me(request: Request):
     u = await usuario_actual(request)
     if not u:
-        return JSONResponse({"autenticado": False}, status_code=401)
+        # `configurado` le dice al front si debe hacer de PUERTA (redirigir a login) o degradar al
+        # uso local (dev sin credenciales OAuth). Ver authUI() en static/4g/index.html.
+        return JSONResponse({"autenticado": False, "configurado": _configurado()}, status_code=401)
     return {"autenticado": True, "email": u["email"], "nombre": u.get("nombre")}
 
 

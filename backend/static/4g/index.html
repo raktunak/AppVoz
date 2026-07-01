@@ -83,7 +83,7 @@
     button.go.is-done:hover { color: var(--txt); border-color: var(--accent2); }
     button.go:disabled { background: transparent; color: #4a5568; border: 1px solid var(--line); cursor: not-allowed; }
     .cv.locked { opacity: .5; }
-    .probador-card { margin-bottom: 18px; border-color: var(--warn); background: #211d14; }
+    .faro-card { margin-bottom: 18px; border-color: var(--warn); background: #211d14; }
     /* desplegable de prompt por agente (editable) + referencia */
     .promptbox { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
     .promptbox summary { cursor: pointer; color: var(--muted); font-size: 12px; }
@@ -159,6 +159,7 @@
   <header>
     <h1>Agenda 4G <span class="sub">· tu vida en un Canva</span></h1>
     <div class="grow"></div>
+    <button id="btnFaro" class="mic" title="Copiloto por voz: pregúntale por el libro o pídele agendar/ver/borrar una cita">🎙️ Habla con Faro</button>
     <span id="status">Pulsa «▶ Empezar» en un apartado — su agente te atiende.</span>
     <span id="authbar" class="authbar"></span>
     <button id="reset" class="reset" title="Borra tu Canva y tus citas de prueba — empezar de cero">↺ Reiniciar</button>
@@ -167,12 +168,12 @@
   <main>
     <nav id="stepper"></nav>
     <section class="canva">
-      <div class="cv probador-card">
+      <div class="cv faro-card">
         <div class="cv-head">
-          <h3>🧪 Probador — charla libre</h3>
-          <button id="btnProbador" class="go">▶ Empezar</button>
+          <h3>🎙️ Habla con Faro</h3>
+          <button id="btnFaroCard" class="go">▶ Empezar</button>
         </div>
-        <div class="seccion-q">Habla con Faro sin recorrer el Canva: pregúntale <b>por el libro</b>, o pídele
+        <div class="seccion-q">Tu copiloto por voz, siempre disponible: pregúntale <b>por el libro</b>, o pídele
           <b>agendar</b>, <b>ver</b> o <b>borrar</b> una cita en tu Google Calendar — todo por voz.
           (Requiere haber iniciado sesión con Google para el calendario.)</div>
       </div>
@@ -184,8 +185,10 @@
     </aside>
   </main>
   <script>
-    // Puerta de login (Google): muestra el estado en la cabecera. NO bloquea el uso local si OAuth
-    // no está configurado (la sesión va por cookie httpOnly; el WS /ws/4g la usa automáticamente).
+    // PUERTA de login (Google): identidad obligatoria (producto comercial multiusuario). Si no hay
+    // sesión y OAuth está configurado → se redirige a /auth/login (no se entra sin cuenta). Si OAuth
+    // NO está configurado (dev local sin credenciales) NO se bloquea: se degrada al uso local por
+    // cookie/localStorage. La sesión va por cookie httpOnly; el WS /ws/4g la usa automáticamente.
     (async function authUI() {
       const bar = document.getElementById('authbar');
       try {
@@ -198,10 +201,15 @@
             await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
             location.reload();
           };
-        } else {
-          bar.innerHTML = '<a class="gbtn" href="/auth/login">Entrar con Google</a>';
+          return;
         }
+        // 401: no hay sesión. Con OAuth configurado → PUERTA: a login (no se entra sin cuenta).
+        const info = await r.json().catch(() => ({}));
+        if (info.configurado) { location.href = '/auth/login'; return; }
+        // OAuth sin configurar (dev local): no tapiar; permitir el uso local.
+        bar.innerHTML = '<a class="gbtn" href="/auth/login">Entrar con Google</a>';
       } catch (e) {
+        // Si /auth/me ni responde, no bloqueamos (mejor degradar que dejar la app inaccesible).
         bar.innerHTML = '<a class="gbtn" href="/auth/login">Entrar con Google</a>';
       }
     })();

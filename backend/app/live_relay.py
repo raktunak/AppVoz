@@ -219,7 +219,7 @@ def _build_config(cfg: dict, tools: list | None = None) -> tuple[str, types.Live
     """Construye el LiveConnectConfig por conexión según las CAPACIDADES del modelo
     elegido: solo aplica voz/idioma/features que ese modelo admite (lo demás se ignora,
     para no provocar que la API rechace la sesión). `tools` (opcional): herramientas de
-    function-calling para la sesión (p.ej. el Probador del 4g); el resto de vías no las usan."""
+    function-calling para la sesión (p.ej. el asistente «Habla con Faro» del 4g); el resto no las usan."""
     model = cfg.get("model") if cfg.get("model") in MODELS_CAPS else DEFAULT_MODEL
     caps = MODELS_CAPS[model]
     voice = cfg.get("voice") if cfg.get("voice") in caps["voices"] else caps["default_voice"]

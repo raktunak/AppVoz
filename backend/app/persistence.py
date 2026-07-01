@@ -431,6 +431,35 @@ async def obtener_sesion(session_id: int) -> dict | None:
     }
 
 
+async def obtener_memoria(user_id: str, subject_id: str) -> dict | None:
+    """Memoria acumulada del usuario para una materia (resumen, temas, dudas, n_sesiones), o None.
+    La ESCRIBE `resumir_sesion`; la LEE el asistente para inyectarla en su prompt (que Faro te recuerde)."""
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT resumen, temas, dudas, n_sesiones FROM memoria_usuario "
+                    "WHERE user_id = :u AND subject_id = :s"
+                ),
+                {"u": user_id, "s": subject_id},
+            )
+        ).mappings().first()
+    if not row:
+        return None
+
+    def _arr(v):   # jsonb puede llegar como str o ya decodificado (asyncpg); normalizamos a list.
+        if v is None:
+            return []
+        return json.loads(v) if isinstance(v, str) else v
+
+    return {
+        "resumen": row["resumen"],
+        "temas": _arr(row["temas"]),
+        "dudas": _arr(row["dudas"]),
+        "n_sesiones": row["n_sesiones"],
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Resumen + memoria — BEST-EFFORT: nunca lanza (todo en try/except con loguru).
 # --------------------------------------------------------------------------- #
