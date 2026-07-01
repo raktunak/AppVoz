@@ -112,4 +112,5 @@ async def search(req: SearchRequest):
 # Frontends estáticos: onboarding 4G (/4g), llamada directa (/call) y banco de voz v1 (/ui)
 app.mount("/4g", _NoCacheStatic(directory="static/4g", html=True), name="4g")
 app.mount("/call", StaticFiles(directory="static/live", html=True), name="call")
+app.mount("/voz", _NoCacheStatic(directory="static/voz", html=True), name="voz")  # config SOLO voz
 app.mount("/ui", StaticFiles(directory="static", html=True), name="ui")
