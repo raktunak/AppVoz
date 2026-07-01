@@ -27,7 +27,7 @@ from loguru import logger
 
 from . import agenda, auth, canva4g, persistence
 from .config import settings
-from .live_relay import _browser_to_gemini, _build_config, _client, _vad_params
+from .live_relay import _AcumuladorTurnos, _browser_to_gemini, _build_config, _client, _vad_params
 from .rag import retrieve
 
 router = APIRouter()
@@ -500,6 +500,7 @@ async def _gemini_to_browser_4g(ws: WebSocket, session, shared: dict):
                 it = getattr(sc, "input_transcription", None)
                 if it and getattr(it, "text", None):
                     shared["_hablo_en_bloque"] = True   # el usuario ha intervenido en el bloque activo
+                    shared["acc"].add_user(it.text)     # persistencia de turnos (paso 4)
                     if shared.get("_last") != "user":
                         shared["conv"] = shared.get("conv", "") + "\nPersona: "
                         shared["_last"] = "user"
@@ -507,6 +508,7 @@ async def _gemini_to_browser_4g(ws: WebSocket, session, shared: dict):
                     await ws.send_text(json.dumps({"type": "user", "text": it.text}))
                 ot = getattr(sc, "output_transcription", None)
                 if ot and getattr(ot, "text", None):
+                    shared["acc"].add_bot(ot.text)      # persistencia de turnos (paso 4)
                     if shared.get("_last") != "bot":
                         shared["conv"] = shared.get("conv", "") + "\nGuía: "
                         shared["_last"] = "bot"
@@ -561,6 +563,7 @@ async def ws_4g(ws: WebSocket):
         "subject_id": subject_id,
         "canva": canva_prev or {}, "sec_idx": canva4g.primera_incompleta(canva_prev),
         "memoria": _texto_memoria(memoria),   # contexto del usuario para el asistente (paso 3)
+        "acc": _AcumuladorTurnos(),   # acumula los turnos hablados para persistir al cerrar (paso 4)
         "fecha_str": fecha_str, "conv": "", "_last": None,
         "no_barge": True,   # anti-eco: el micro se ignora mientras Faro habla
         "_captura_turno": True,   # guarda el audio de cada turno para el STT fiable de respaldo
@@ -599,6 +602,20 @@ async def ws_4g(ws: WebSocket):
             await canva4g.guardar_canva(user_id, shared["canva"], subject_id)
         except Exception:
             logger.exception("[4g] no pude guardar el canva final")
+        # Persistir la conversación (turnos) — best-effort, nunca rompe el cierre. Mismo patrón que
+        # live_relay/telnyx: acumular → crear_sesion → guardar_turnos → cerrar → resumir en background.
+        try:
+            turnos = shared["acc"].finalizar()
+            if turnos:
+                session_id = await persistence.crear_sesion(subject_id, user_id, via="4g")
+                n = await persistence.guardar_turnos(session_id, turnos)
+                await persistence.cerrar_sesion(session_id, n)
+                # Resumen → memoria_usuario (fire-and-forget). OJO: hoy SOBRESCRIBE; el paso 5
+                # cambiará a ACUMULAR entre sesiones. Cierra el bucle con el paso 3 (inyección).
+                asyncio.create_task(persistence.resumir_sesion(session_id))
+                logger.info(f"[4g] sesión {session_id} persistida ({n} turnos) user={user_id}")
+        except Exception:
+            logger.exception("[4g] no pude persistir la conversación; se ignora")
         try:
             await ws.close()
         except Exception:
